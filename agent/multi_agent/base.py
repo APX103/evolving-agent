@@ -49,11 +49,27 @@ class AgentContext:
     metadata: Dict = field(default_factory=dict)
 
     def to_messages(self, system_prompt: str) -> List[Dict[str, str]]:
+        """
+        构建消息列表，针对 RoPE Context Rot 和 Lost-in-the-Middle 优化：
+        1. Eternal Memory 合并到 system prompt（确保核心画像获得最强注意力）
+        2. Working Context 紧随 system prompt 后（当前任务需要最近位置）
+        3. Rules 次之（行为策略）
+        4. Summaries 最后（历史信息，可容忍衰减）
+        5. short_term 放在最后（最近对话天然在最后，符合 U 形注意力优势）
+        """
+        # Layer 1: Eternal Memory 合并到 system prompt
+        eternal = self.layers.get(LayerType.ETERNAL, "")
+        if eternal:
+            system_prompt = f"{system_prompt}\n\n【用户核心画像】\n{eternal}"
+
         messages = [{"role": "system", "content": system_prompt}]
-        for lt in [LayerType.ETERNAL, LayerType.SUMMARIES, LayerType.WORKING, LayerType.RULES]:
+
+        # 按重要性排序：WORKING > RULES > SUMMARIES
+        for lt in [LayerType.WORKING, LayerType.RULES, LayerType.SUMMARIES]:
             content = self.layers.get(lt, "")
             if content:
                 messages.append({"role": "system", "content": f"[{lt.value}]\n{content}"})
+
         messages.extend(self.short_term)
         return messages
 

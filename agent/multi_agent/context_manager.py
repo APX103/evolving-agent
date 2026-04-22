@@ -32,6 +32,7 @@ class ContextManager:
         self.config = config or {}
         self._token_counter = TokenCounter()
         self._summaries_cache: Dict[str, List[str]] = {}
+        self._load_summaries_from_disk()
 
     def _estimate_tokens(self, text: str) -> int:
         return self._token_counter.count(text)
@@ -177,12 +178,53 @@ class ContextManager:
         return ""
 
     def _load_session_summaries(self, user_id: str) -> List[str]:
-        return self._summaries_cache.get(user_id, [])
+        # 优先从内存，其次从磁盘
+        if user_id in self._summaries_cache:
+            return self._summaries_cache[user_id]
+        return self._load_summaries_for_user(user_id)
+
+    def _summaries_path(self, user_id: str) -> str:
+        from agent.storage.local_json import LocalJsonStorage
+        storage = LocalJsonStorage()
+        base = self.config.get("storage_base", "./storage")
+        path = os.path.join(base, user_id, "session_summaries")
+        storage.ensure_dir(path)
+        return os.path.join(path, "summaries.json")
+
+    def _load_summaries_for_user(self, user_id: str) -> List[str]:
+        path = self._summaries_path(user_id)
+        if not os.path.exists(path):
+            return []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                summaries = data if isinstance(data, list) else data.get("summaries", [])
+                self._summaries_cache[user_id] = summaries
+                return summaries
+        except Exception as e:
+            logger.warning(f"[ContextManager] 加载 summaries 失败: {e}")
+            return []
+
+    def _save_summaries_for_user(self, user_id: str):
+        path = self._summaries_path(user_id)
+        try:
+            summaries = self._summaries_cache.get(user_id, [])
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"summaries": summaries, "updated_at": datetime.now().isoformat()}, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"[ContextManager] 保存 summaries 失败: {e}")
+
+    def _load_summaries_from_disk(self):
+        """启动时加载所有用户的 summaries（惰性加载更好，但初始化时扫描一次）"""
+        # 实际采用惰性加载，在 _load_session_summaries 时按需加载
+        pass
 
     def _append_session_summary(self, user_id: str, summary: str):
         if user_id not in self._summaries_cache:
             self._summaries_cache[user_id] = []
         self._summaries_cache[user_id].append(summary)
+        # 持久化到磁盘
+        self._save_summaries_for_user(user_id)
 
     def _load_working_context(self, user_id: str) -> Dict:
         try:
