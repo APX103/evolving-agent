@@ -1,7 +1,8 @@
 """
-实时信号学习
-对话中检测到特定信号词时，立即触发迷你学习
-不用等 /bye 会话结束
+实时信号学习 v2.0
+- 新增语义信号检测（Embedding 替代正则）
+- 新增 LLM-as-Judge 质量过滤
+- 支持结构化三元组提取
 """
 import re
 from typing import Dict, List, Optional
@@ -9,10 +10,13 @@ from typing import Dict, List, Optional
 from agent.events import EventBus, default_bus
 from agent.llm.base import LLMClient
 from agent.memory import MemoryManager
+from agent.quality_judge import QualityJudge
+from agent.semantic_detector import SemanticSignalDetector
+from agent.knowledge_graph import Triple
 
 
-# ── 信号模式定义 ──
-SIGNAL_PATTERNS = {
+# ── 保留正则作为 fallback ──
+REGEX_PATTERNS = {
     "remember": {
         "patterns": [
             r"请记住[，,:：]?\s*(.+)",
@@ -23,7 +27,6 @@ SIGNAL_PATTERNS = {
         ],
         "action": "add_knowledge",
         "category": "fact",
-        "prompt_template": "提取用户要求记住的关键信息，只保留核心事实: {}"
     },
     "preference_positive": {
         "patterns": [
@@ -35,7 +38,6 @@ SIGNAL_PATTERNS = {
         ],
         "action": "add_knowledge",
         "category": "preference",
-        "prompt_template": "提取用户的偏好，简短描述: {}"
     },
     "preference_negative": {
         "patterns": [
@@ -48,7 +50,6 @@ SIGNAL_PATTERNS = {
         ],
         "action": "add_knowledge",
         "category": "preference",
-        "prompt_template": "提取用户的负面偏好/禁忌，简短描述: {}"
     },
     "identity": {
         "patterns": [
@@ -56,16 +57,9 @@ SIGNAL_PATTERNS = {
             r"我的名字是(.+)",
             r"我是做(.+)的",
             r"我的工作[是]?(.+)",
-            # 排除"我是说/想/觉得"等常见前缀
             r"我是(?!说|想|觉得|认为|指|在|要|会|可以|可能|已经|就是)(.+)",
         ],
         "action": "update_profile",
-        "key_map": {
-            r"我叫|我的名字是": "name",
-            r"我是做|我的工作[是]?": "职业",
-            r"我是": "身份",
-        },
-        "prompt_template": "提取用户的身份信息，简短描述: {}"
     },
     "correction": {
         "patterns": [
@@ -77,7 +71,6 @@ SIGNAL_PATTERNS = {
         ],
         "action": "add_knowledge",
         "category": "lesson",
-        "prompt_template": "提取用户的纠正内容，记录正确的做法: {}"
     },
     "urgency": {
         "patterns": [
@@ -113,7 +106,8 @@ SIGNAL_PATTERNS = {
 
 class SignalLearner:
     """
-    实时信号学习者：对话中即时检测信号，触发快速学习
+    实时信号学习者 v2.0
+    融合语义检测 + 正则 fallback + 质量过滤
     """
 
     def __init__(
@@ -128,6 +122,11 @@ class SignalLearner:
         self.personality = personality
         self.event_bus = event_bus or default_bus
 
+        # 语义检测器
+        self.semantic_detector = SemanticSignalDetector(llm_client)
+        # 质量过滤器
+        self.quality_judge = QualityJudge(llm_client)
+
     def scan_and_learn(self, user_input: str, assistant_response: str = "") -> List[Dict]:
         """
         扫描用户输入，检测所有信号，立即学习
@@ -135,33 +134,74 @@ class SignalLearner:
         """
         logs = []
 
-        for signal_type, config in SIGNAL_PATTERNS.items():
-            # 先检测是否匹配
-            match = self._match_patterns(user_input, config.get("patterns", []))
-            if not match:
-                continue
-
-            extracted = match.group(1).strip() if match.lastindex else user_input
-
-            # 执行对应动作
-            result = self._execute_action(signal_type, config, extracted, user_input)
+        # ── 第一层：语义检测（优先） ──
+        semantic_result = self.semantic_detector.detect(user_input)
+        if semantic_result:
+            intent_name, sim = semantic_result
+            logs.append({
+                "signal": intent_name,
+                "method": "semantic",
+                "similarity": sim,
+            })
+            # 根据意图类型执行对应动作
+            result = self._execute_by_intent(intent_name, user_input)
             if result:
-                log = {
-                    "signal": signal_type,
-                    "extracted": extracted,
-                    "action": config["action"],
-                    "result": result
-                }
-                logs.append(log)
-                self.event_bus.publish("signal.learned", log)
+                logs[-1]["result"] = result
+                self.event_bus.publish("signal.learned", logs[-1])
 
-        # 检测情感反馈（不用 regex，用关键词）
+        # ── 第二层：正则 fallback ──
+        regex_hits = self._regex_scan(user_input)
+        for hit in regex_hits:
+            # 避免与语义检测重复（如果语义已命中同类型，跳过）
+            if semantic_result and semantic_result[0] == hit["signal"]:
+                continue
+            result = self._execute_by_regex(hit)
+            if result:
+                hit["result"] = result
+                logs.append(hit)
+                self.event_bus.publish("signal.learned", hit)
+
+        # ── 情感反馈检测（保持原有逻辑） ──
         feedback = self._detect_feedback(user_input)
         if feedback:
             self.personality.adapt_from_feedback(feedback)
             logs.append({"signal": "feedback", "type": feedback, "action": "personality_adjust"})
 
         return logs
+
+    def _execute_by_intent(self, intent_name: str, full_input: str) -> Optional[str]:
+        """根据语义意图执行动作"""
+        # 映射意图到配置
+        config_map = {
+            "remember": {"action": "add_knowledge", "category": "fact"},
+            "preference_positive": {"action": "add_knowledge", "category": "preference"},
+            "preference_negative": {"action": "add_knowledge", "category": "preference"},
+            "identity": {"action": "update_profile"},
+            "correction": {"action": "add_knowledge", "category": "lesson"},
+            "urgency": {"action": "set_working", "key": "urgency", "value": True},
+            "gratitude": {"action": "feedback_positive"},
+            "frustration": {"action": "feedback_negative"},
+        }
+        config = config_map.get(intent_name)
+        if not config:
+            return None
+
+        return self._execute_action(intent_name, config, full_input, full_input)
+
+    def _regex_scan(self, text: str) -> List[Dict]:
+        """正则扫描，返回所有命中"""
+        hits = []
+        for signal_type, config in REGEX_PATTERNS.items():
+            match = self._match_patterns(text, config.get("patterns", []))
+            if match:
+                extracted = match.group(1).strip() if match.lastindex else text
+                hits.append({
+                    "signal": signal_type,
+                    "extracted": extracted,
+                    "action": config["action"],
+                    "method": "regex",
+                })
+        return hits
 
     def _match_patterns(self, text: str, patterns: List[str]) -> Optional[re.Match]:
         for p in patterns:
@@ -170,25 +210,45 @@ class SignalLearner:
                 return match
         return None
 
+    def _execute_by_regex(self, hit: Dict) -> Optional[str]:
+        """执行正则命中结果"""
+        config = REGEX_PATTERNS.get(hit["signal"], {})
+        return self._execute_action(hit["signal"], config, hit["extracted"], hit.get("full_input", ""))
+
     def _execute_action(self, signal_type: str, config: Dict, extracted: str, full_input: str) -> Optional[str]:
-        action = config["action"]
+        action = config.get("action")
 
         if action == "add_knowledge":
-            # 使用 LLM 精炼提取内容
-            prompt = config["prompt_template"].format(extracted)
-            refined = self.llm_client.quick_chat(prompt, system="你只输出精炼后的事实，不要解释，不要多余文字。")
-            refined = refined.strip().strip("\"'")
+            # 结构化提取 + 质量过滤
+            prompt = self._build_extraction_prompt(signal_type, extracted)
+            refined = self.llm_client.quick_chat(prompt, system="你只输出 JSON，不要解释。").strip().strip("\"'")
 
             if len(refined) > 5:
-                result = self.memory.add_knowledge(
-                    category=config.get("category", "fact"),
-                    content=refined,
-                    source=f"signal:{signal_type}"
-                )
-                return result["action"]
+                # 尝试解析为结构化知识
+                structured = self._try_parse_structured(refined, config.get("category", "fact"))
+                # 质量过滤
+                source_text = f"用户说: {full_input}"
+                filtered = self.quality_judge.filter_valid([structured], source_text)
+
+                if filtered:
+                    item = filtered[0]
+                    # 尝试存为三元组
+                    triple = self._item_to_triple(item, signal_type)
+                    if triple and self.memory.knowledge_graph:
+                        added = self.memory.knowledge_graph.add(triple)
+                        if added:
+                            return f"kg:{triple.predicate}:{triple.object}"
+
+                    # fallback 到传统知识库
+                    result = self.memory.add_knowledge(
+                        category=item.get("category", "fact"),
+                        content=item.get("content", refined),
+                        source=f"signal:{signal_type}"
+                    )
+                    return result["action"]
+            return None
 
         elif action == "update_profile":
-            # 尝试确定 key
             key = self._determine_profile_key(config, full_input)
             if key:
                 refined = self.llm_client.quick_chat(
@@ -199,7 +259,7 @@ class SignalLearner:
                 return f"profile:{key}={refined}"
 
         elif action == "set_working":
-            self.memory.set_working(config["key"], config["value"])
+            self.memory.set_working(config.get("key"), config.get("value"))
             return f"working:{config['key']}={config['value']}"
 
         elif action == "feedback_positive":
@@ -212,6 +272,45 @@ class SignalLearner:
 
         return None
 
+    def _build_extraction_prompt(self, signal_type: str, extracted: str) -> str:
+        """构建结构化提取 prompt"""
+        templates = {
+            "remember": f"提取用户要求记住的关键事实，返回 JSON: {{\"content\":\"...\",\"subject\":\"用户\",\"predicate\":\"知道\",\"object\":\"...\",\"temporal_state\":\"current\"}}。文本: {extracted}",
+            "preference_positive": f"提取用户的正面偏好，返回 JSON: {{\"content\":\"...\",\"subject\":\"用户\",\"predicate\":\"喜欢\",\"object\":\"...\",\"temporal_state\":\"current\"}}。文本: {extracted}",
+            "preference_negative": f"提取用户的负面偏好，返回 JSON: {{\"content\":\"...\",\"subject\":\"用户\",\"predicate\":\"不喜欢\",\"object\":\"...\",\"temporal_state\":\"current\"}}。文本: {extracted}",
+            "correction": f"提取用户的纠正内容，返回 JSON: {{\"content\":\"...\",\"subject\":\"用户\",\"predicate\":\"纠正\",\"object\":\"...\",\"temporal_state\":\"current\"}}。文本: {extracted}",
+        }
+        return templates.get(signal_type, f"提取关键信息，返回 JSON: {{\"content\":\"...\"}}。文本: {extracted}")
+
+    def _try_parse_structured(self, text: str, default_category: str) -> Dict:
+        """尝试解析结构化 JSON"""
+        import json
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict):
+                data["category"] = default_category
+                return data
+        except Exception:
+            pass
+        return {"content": text, "category": default_category}
+
+    def _item_to_triple(self, item: Dict, source: str) -> Optional[Triple]:
+        """把结构化 item 转为 Triple"""
+        from datetime import datetime
+        try:
+            return Triple(
+                subject=item.get("subject", "用户"),
+                predicate=item.get("predicate", "知道"),
+                object=item.get("object", item.get("content", "")[:50]),
+                temporal_state=item.get("temporal_state", "current"),
+                confidence=item.get("_confidence", 0.8),
+                source=source,
+                created_at=datetime.now().isoformat(),
+                updated_at=datetime.now().isoformat(),
+            )
+        except Exception:
+            return None
+
     def _determine_profile_key(self, config: Dict, text: str) -> Optional[str]:
         key_map = config.get("key_map", {})
         for pattern, key in key_map.items():
@@ -220,32 +319,25 @@ class SignalLearner:
         return "identity"
 
     def _detect_feedback(self, text: str) -> Optional[str]:
-        """
-        简单情感检测
-        """
+        """简单情感检测"""
         lowered = text.lower()
 
-        # 积极信号
         positive_signals = ["谢谢", "感谢", "不错", "很好", "完美", "厉害", "棒", "给力", "学到了", "有帮助"]
         if any(s in lowered for s in positive_signals):
             return "positive"
 
-        # 热情信号
         enthusiasm_signals = ["哇", "太棒了", " awesome", " amazing", "喜欢", "太喜欢了"]
         if any(s in lowered for s in enthusiasm_signals):
             return "enthusiasm"
 
-        # 纠正信号
         correction_signals = ["不对", "错了", "不是这样", "纠正", "其实", "应该是"]
         if any(s in lowered for s in correction_signals):
             return "correction"
 
-        # 无聊/不耐烦
         boredom_signals = ["无聊", "没意思", "太慢了", "能不能快点", "说重点"]
         if any(s in lowered for s in boredom_signals):
             return "boredom"
 
-        # 负面
         negative_signals = ["烦", "气", "无语", "失望", "没用", "不行", "差"]
         if any(s in lowered for s in negative_signals):
             return "negative"
@@ -253,9 +345,7 @@ class SignalLearner:
         return None
 
     def on_turn_complete(self, user_input: str, assistant_response: str):
-        """
-        每轮对话完成后调用，做实时信号学习
-        """
+        """每轮对话完成后调用，做实时信号学习"""
         logs = self.scan_and_learn(user_input, assistant_response)
 
         # 检测用户是否在说 Agent 的回复太长/太短

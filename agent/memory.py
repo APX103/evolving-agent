@@ -1,7 +1,6 @@
 """
-分层记忆系统 (v2.2)
-支持向量语义检索 + 知识去重合并 + 记忆老化
-接入 StorageBackend，原子写入 + 线程安全
+分层记忆系统 v3.0
+支持向量语义检索 + 知识去重合并 + 记忆老化 + 知识图谱
 """
 import json
 import os
@@ -14,14 +13,15 @@ from agent.config import Config
 from agent.llm.base import LLMClient
 from agent.storage.base import StorageBackend
 from agent.storage.local_json import LocalJsonStorage
+from agent.knowledge_graph import KnowledgeGraph
 
 
 class MemoryManager:
     """
-    三层记忆管理 + 向量索引
+    三层记忆管理 + 向量索引 + 知识图谱
     - 短期记忆：当前会话
     - 工作记忆：本次关键点
-    - 长期记忆：知识库（向量索引 + 语义搜索 + 去重合并）
+    - 长期记忆：知识库（向量索引 + 语义搜索 + 去重合并 + 知识图谱）
     """
 
     def __init__(
@@ -42,11 +42,10 @@ class MemoryManager:
         self.profile_path = storage_cfg.get("user_profile", os.path.join(self.base_path, "user_profile"))
         self.reflection_path = storage_cfg.get("reflections", os.path.join(self.base_path, "reflections"))
 
-        # 确保目录存在
         for p in [self.conv_path, self.knowledge_path, self.profile_path, self.reflection_path]:
             self.storage.ensure_dir(p)
 
-        # Embedding 客户端
+        # LLM 客户端
         self.llm_client = llm_client
         self._embedding_available = self.llm_client is not None
 
@@ -60,36 +59,31 @@ class MemoryManager:
         self.session_id: str = self._new_session_id()
 
         # 加载长期记忆
-        self.knowledge_base: List[Dict[str, Any]] = self.storage.load_json(
-            "knowledge_base.json", self.knowledge_path, default=[]
-        )
-        self.user_profile: Dict[str, Any] = self.storage.load_json(
-            "user_profile.json", self.profile_path, default={}
-        )
-        self.reflections: List[Dict[str, Any]] = self.storage.load_json(
-            "reflections.json", self.reflection_path, default=[]
-        )
+        self.knowledge_base = self.storage.load_json("knowledge_base.json", self.knowledge_path, default=[])
+        self.user_profile = self.storage.load_json("user_profile.json", self.profile_path, default={})
+        self.reflections = self.storage.load_json("reflections.json", self.reflection_path, default=[])
         self.session_count = self.user_profile.get("session_count", 0)
+
+        # 知识图谱
+        self.knowledge_graph = KnowledgeGraph(
+            storage_path=os.path.join(self.knowledge_path, "graph")
+        )
 
         # 加载或构建向量索引
         self._vectors = self._load_vectors()
-        # 修复：有知识但无向量时，重建索引
         if self._vectors is None and self.knowledge_base:
             print(f"[Memory] 检测到 {len(self.knowledge_base)} 条知识，重建向量索引...")
             self._build_all_vectors()
 
-    # ── 底层工具 ──
     def _new_session_id(self) -> str:
         return datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # ── 向量索引管理 ──
     def _load_vectors(self) -> Optional[np.ndarray]:
-        """加载已有向量索引"""
         if os.path.exists(self.vector_path) and os.path.exists(self.vector_meta_path):
             try:
                 vecs = np.load(self.vector_path)
                 meta = self.storage.load_json("vectors_meta.json", self.knowledge_path, default=[])
-                # 校验长度一致
                 if len(meta) == len(self.knowledge_base) == len(vecs):
                     return vecs
                 else:
@@ -99,18 +93,15 @@ class MemoryManager:
         return None
 
     def _save_vectors(self):
-        """保存向量索引"""
         if self._vectors is not None:
             np.save(self.vector_path, self._vectors)
             meta = [{"id": k["id"], "idx": i} for i, k in enumerate(self.knowledge_base)]
             self.storage.save_json(meta, "vectors_meta.json", self.knowledge_path)
 
     def _build_all_vectors(self):
-        """全量重建向量索引"""
         if not self._embedding_available or not self.knowledge_base:
             self._vectors = None
             return
-
         texts = [k["content"] for k in self.knowledge_base]
         try:
             self._vectors = self.llm_client.embed(texts)
@@ -121,12 +112,10 @@ class MemoryManager:
             self._vectors = None
 
     def _append_vector(self, text: str):
-        """为单条知识追加向量"""
         if not self._embedding_available:
             return
         try:
             vec = self.llm_client.embed(text)
-            # embed 保证返回 2D
             if self._vectors is None:
                 self._vectors = vec
             else:
@@ -136,7 +125,6 @@ class MemoryManager:
             print(f"[Memory] 追加向量失败: {e}")
 
     def _rebuild_vector_for(self, item: Dict[str, Any]):
-        """重建单条知识的向量（内容变更后）"""
         if not self._embedding_available or self._vectors is None:
             return
         try:
@@ -147,7 +135,6 @@ class MemoryManager:
                     break
             if idx is None or idx >= len(self._vectors):
                 return
-
             vec = self.llm_client.embed(item["content"])
             self._vectors[idx] = vec[0]
             self._save_vectors()
@@ -182,27 +169,21 @@ class MemoryManager:
         entry = self.working_memory.get(key)
         return entry["value"] if entry else None
 
-    # ── 长期记忆（核心：去重合并 + 向量索引） ──
+    # ── 长期记忆（核心：去重合并 + 向量索引 + 知识图谱） ──
     def add_knowledge(self, category: str, content: str, source: str = "") -> Dict[str, str]:
-        """
-        添加知识，自动去重合并
-        返回: {"action": "added"|"merged"|"skipped", "id": str}
-        """
         content = content.strip()
         if not content:
             return {"action": "skipped", "id": ""}
 
-        # 1. 去重检查（语义相似度）
+        # 1. 去重检查
         duplicate = self._find_duplicate(content)
         if duplicate:
-            # 合并：保留更完整的版本，更新访问时间
             merged_content = self._merge_content(duplicate["content"], content)
             duplicate["content"] = merged_content
             duplicate["last_accessed"] = datetime.now().isoformat()
             duplicate["access_count"] = duplicate.get("access_count", 0) + 1
             duplicate["merge_count"] = duplicate.get("merge_count", 0) + 1
             self.storage.save_json(self.knowledge_base, "knowledge_base.json", self.knowledge_path)
-            # 修复：内容变了，重建该条向量
             self._rebuild_vector_for(duplicate)
             return {"action": "merged", "id": duplicate["id"]}
 
@@ -219,28 +200,18 @@ class MemoryManager:
         }
         self.knowledge_base.append(item)
         self.storage.save_json(self.knowledge_base, "knowledge_base.json", self.knowledge_path)
-
-        # 3. 追加向量
         self._append_vector(content)
-
         return {"action": "added", "id": item["id"]}
 
     def _find_duplicate(self, content: str) -> Optional[Dict[str, Any]]:
-        """
-        查找语义重复的知识
-        先用精确匹配加速，再用向量相似度
-        """
-        # 精确匹配（内容完全一致或包含）
         content_lower = content.lower()
         for item in self.knowledge_base:
             if content_lower == item["content"].lower():
                 return item
-            # 互相包含视为重复（短句不做此判断，避免误杀）
             if len(content) > 15 and len(item["content"]) > 15:
                 if content_lower in item["content"].lower() or item["content"].lower() in content_lower:
                     return item
 
-        # 向量相似度匹配
         if not self._embedding_available or self._vectors is None or len(self.knowledge_base) == 0:
             return None
 
@@ -249,16 +220,13 @@ class MemoryManager:
             sims = self.llm_client.cosine_similarity(query_vec[0], self._vectors)
             best_idx = int(np.argmax(sims))
             best_sim = float(sims[best_idx])
-
-            if best_sim > 0.85:  # 高阈值避免误判
+            if best_sim > 0.85:
                 return self.knowledge_base[best_idx]
         except Exception:
             pass
-
         return None
 
     def _merge_content(self, old: str, new: str) -> str:
-        """合并两条相似内容，保留更完整的"""
         old_l = old.lower()
         new_l = new.lower()
         if new_l in old_l:
@@ -268,43 +236,30 @@ class MemoryManager:
         return f"{old}\n（补充：{new}）"
 
     def search_knowledge(self, query: str = "", category: str = "", limit: int = 10) -> List[Dict[str, Any]]:
-        """
-        双路搜索：向量语义召回 + 字符串精确匹配兜底
-        """
-        results: List[Dict[str, Any]] = []
+        results = []
         updated_any = False
 
-        # 向量语义搜索（优先）
         if self._embedding_available and self._vectors is not None and query and len(self.knowledge_base) > 0:
             try:
                 query_vec = self.llm_client.embed(query)
                 sims = self.llm_client.cosine_similarity(query_vec[0], self._vectors)
-
                 top_k = min(limit * 3, len(sims))
                 top_indices = np.argsort(sims)[-top_k:][::-1]
-
                 for idx in top_indices:
                     idx = int(idx)
                     item = self.knowledge_base[idx]
                     sim = float(sims[idx])
-
                     if sim < 0.55:
                         continue
-
                     if category and item["category"] != category:
                         continue
-
-                    # 标记访问
                     item["access_count"] = item.get("access_count", 0) + 1
                     item["last_accessed"] = datetime.now().isoformat()
                     updated_any = True
-
-                    enriched = {**item, "_similarity": round(sim, 3)}
-                    results.append(enriched)
+                    results.append({**item, "_similarity": round(sim, 3)})
             except Exception as e:
                 print(f"[Memory] 向量搜索失败: {e}")
 
-        # 字符串匹配兜底（如果向量没召回够）
         if len(results) < limit // 2 and query:
             for item in self.knowledge_base:
                 if category and item["category"] != category:
@@ -319,13 +274,11 @@ class MemoryManager:
                 if len(results) >= limit:
                     break
 
-        # 如果没有 query，按访问频次返回热门知识
         if not query:
             candidates = [k for k in self.knowledge_base if not category or k["category"] == category]
             candidates.sort(key=lambda x: (x.get("access_count", 0), x.get("last_accessed", "")), reverse=True)
             results = [{**k, "_similarity": 0.0} for k in candidates[:limit]]
 
-        # 修复：只要有 access_count 被改就保存
         if updated_any:
             self.storage.save_json(self.knowledge_base, "knowledge_base.json", self.knowledge_path)
 
@@ -356,27 +309,19 @@ class MemoryManager:
 
     # ── 记忆老化与清理 ──
     def cleanup_stale_knowledge(self, days: int = 60, min_access: int = 1) -> int:
-        """
-        清理长时间未访问且访问次数少的知识
-        返回清理数量
-        """
         cutoff = datetime.now() - timedelta(days=days)
         cutoff_iso = cutoff.isoformat()
-
         kept = []
         removed = 0
         kept_indices = []
 
         for i, item in enumerate(self.knowledge_base):
-            # 保留规则：高访问、近期访问、反思、用户画像
             if item["category"] in ("reflection", "personality"):
                 kept.append(item)
                 kept_indices.append(i)
                 continue
-
             last_accessed = item.get("last_accessed", item["created_at"])
             access_count = item.get("access_count", 0)
-
             if access_count >= min_access or last_accessed > cutoff_iso:
                 kept.append(item)
                 kept_indices.append(i)
@@ -386,24 +331,19 @@ class MemoryManager:
         if removed > 0:
             self.knowledge_base = kept
             self.storage.save_json(self.knowledge_base, "knowledge_base.json", self.knowledge_path)
-
-            # 修复：同步裁剪向量（做空保护）
             if self._vectors is not None:
                 if len(kept_indices) == 0:
                     self._vectors = None
                 else:
                     self._vectors = self._vectors[kept_indices]
                 self._save_vectors()
-
             print(f"[Memory] 清理 {removed} 条陈旧知识，剩余 {len(kept)} 条")
-
         return removed
 
     # ── 会话管理 ──
     def end_session(self):
         if not self.short_term:
             return
-
         session_data = {
             "session_id": self.session_id,
             "started_at": self.short_term[0]["timestamp"],
@@ -412,7 +352,6 @@ class MemoryManager:
             "messages": self.short_term,
             "working_memory": self.working_memory
         }
-
         filepath = os.path.join(self.conv_path, f"session_{self.session_id}.json")
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(session_data, f, ensure_ascii=False, indent=2)
@@ -420,14 +359,10 @@ class MemoryManager:
         self.session_count += 1
         self.user_profile["session_count"] = self.session_count
         self.storage.save_json(self.user_profile, "user_profile.json", self.profile_path)
-
         self.short_term = []
         self.working_memory = {}
 
     def get_relevant_context(self, query_hint: str = "", limit: int = 5) -> str:
-        """
-        构建上下文提示，支持基于当前 query 的语义召回
-        """
         parts = []
 
         # 用户画像
@@ -436,6 +371,12 @@ class MemoryManager:
             parts.append("【关于用户】")
             for k, v in list(profile.items())[:5]:
                 parts.append(f"- {k}: {v}")
+
+        # 知识图谱上下文
+        if self.knowledge_graph:
+            kg_context = self.knowledge_graph.to_context_string(subject="用户", limit=5)
+            if kg_context:
+                parts.append(f"\n{kg_context}")
 
         # 语义召回知识
         if query_hint:
@@ -449,7 +390,7 @@ class MemoryManager:
                 sim_tag = f"(相关度{item['_similarity']})" if item.get("_similarity", 0) > 0 else ""
                 parts.append(f"- [{item['category']}] {item['content']} {sim_tag}".strip())
 
-        # 改进：只包含最近 3 次反思
+        # 最近反思
         recent_reflections = self.reflections[-3:] if self.reflections else []
         if recent_reflections:
             last = recent_reflections[-1]

@@ -1,6 +1,7 @@
 """
-Agent 核心逻辑 (v3.1)
+Agent 核心逻辑 (v3.2)
 协调记忆、人格、情绪、关系、Skill、后台学习和对话
+新增：增量学习、反馈闭环、知识图谱
 """
 import logging
 import threading
@@ -22,7 +23,6 @@ from agent.relationship import RelationshipLog
 from agent.mood import AgentMood
 from agent.storage.local_json import LocalJsonStorage
 
-# 日志初始化
 logger = logging.getLogger("agent.core")
 
 
@@ -32,13 +32,9 @@ class EvolvingAgent:
         self.agent_cfg = self.config.agent
         self.name = self.agent_cfg.get("name", "Evo")
 
-        # 统一存储后端
         self.storage = LocalJsonStorage()
-
-        # LLM 客户端
         self.llm_client = KimiLLMClient(self.config)
 
-        # 初始化各模块
         self.memory = MemoryManager(
             config=self.config,
             storage=self.storage,
@@ -47,7 +43,6 @@ class EvolvingAgent:
         self.learner = Learner(self.llm_client, self.memory)
         self.reflector = Reflector(self.llm_client, self.memory)
 
-        # 人格引擎 + 信号学习
         storage_base = self.config.storage.get("base_path", "./storage")
         self.personality = PersonalityEngine(
             storage_path=self.config.storage.get("personality", f"{storage_base}/personality"),
@@ -58,7 +53,6 @@ class EvolvingAgent:
             event_bus=default_bus,
         )
 
-        # 通人性三大模块
         self.emotion_sensor = EmotionSensor(self.llm_client)
         self.relationship = RelationshipLog(
             storage_path=self.config.storage.get("relationship", f"{storage_base}/relationship"),
@@ -69,7 +63,6 @@ class EvolvingAgent:
             storage=self.storage,
         )
 
-        # Skill 插件系统
         self.skills = build_default_skills()
 
         self.session_active = False
@@ -77,43 +70,33 @@ class EvolvingAgent:
         self._learning_logs: List[str] = []
         self._log_lock = threading.Lock()
 
-        # 事件总线
         self.event_bus = default_bus
 
     def _build_system_prompt(self, query_hint: str = "") -> str:
-        """构建包含身份、人格、记忆、关系、情绪的动态系统提示"""
         parts = []
-
-        # 身份
         parts.append(f"你是 {self.name}，一个不断学习和进化的 AI 助手。")
         parts.append("每次对话后你都会复盘学习，所以你会越来越了解用户、越来越擅长帮助他们。")
 
-        # 关系档案
         rel_context = self.relationship.get_relationship_context()
         if rel_context:
             parts.append(f"\n{rel_context}")
 
-        # Agent 自身情绪状态（内在状态，不是用户偏好）
         mood_instruction = self.mood.get_instruction()
         if mood_instruction:
             parts.append(f"\n【你此刻的状态】\n{mood_instruction}")
 
-        # 自我认知（反思产物）
         personality_text = self.memory.get_profile("agent_personality")
         if personality_text:
             parts.append(f"\n【你的自我认知】{personality_text}")
 
-        # 动态人格行为指令
         behavior = self.personality.get_behavior_instructions()
         if behavior:
             parts.append(f"\n【当前风格指令】\n{behavior}")
 
-        # 基于当前问题的语义召回上下文
         context = self.memory.get_relevant_context(query_hint=query_hint, limit=5)
         if context:
             parts.append(f"\n{context}")
 
-        # 基础行为指南
         parts.append("\n【行为指南】")
         parts.append("- 自然对话，不需要过度礼貌")
         parts.append("- 记住用户之前说过的话，自然地引用")
@@ -123,7 +106,6 @@ class EvolvingAgent:
         return "\n".join(parts)
 
     def start_session(self):
-        """开始新会话"""
         if self._learning_thread and self._learning_thread.is_alive():
             self._learning_thread.join(timeout=60)
             self._learning_thread = None
@@ -132,7 +114,6 @@ class EvolvingAgent:
         self.mood.reset_session()
         self.emotion_sensor.session_emotions.clear()
 
-        # 检查是否需要反思
         threshold = self.agent_cfg.get("reflect_threshold", 5)
         if self.reflector.should_reflect(threshold):
             logger.info("🧠 正在反思之前的对话，准备进化一下...")
@@ -152,16 +133,13 @@ class EvolvingAgent:
         self.event_bus.publish("session.started", {"agent": self.name})
 
     def chat(self, user_input: str):
-        """处理用户输入，返回字符串（Skill）或生成器（LLM 流式）"""
         if not self.session_active:
             self.start_session()
 
-        # 先打印后台学习积累日志
         self._flush_learning_logs()
-
         self.event_bus.publish("turn.started", {"user_input": user_input})
 
-        # ── 实时人格调整（信号词） ──
+        # 人格信号微调
         signal_changes = self.personality.apply_signals(user_input)
         if signal_changes:
             changed_dims = ", ".join([f"{k}→{v:+.2f}" for k, v in signal_changes.items()])
@@ -179,12 +157,10 @@ class EvolvingAgent:
 
         self.event_bus.publish("emotion.detected", emotion_result)
 
-        # 情绪驱动的 personality 微调
         emotion_style_adj = self.emotion_sensor.get_style_adjustments(emotion_result)
         for dim, delta in emotion_style_adj.items():
             self.personality.adjust(dim, delta)
 
-        # 更新 Agent 自身 mood
         self.mood.turn_count_in_session = len(self.memory.short_term) // 2
         feedback_type = self._detect_quick_feedback(user_input)
         self.mood.update_from_interaction(
@@ -194,10 +170,9 @@ class EvolvingAgent:
             feedback_type=feedback_type
         )
 
-        # 记录用户输入到短期记忆
         self.memory.add_turn("user", user_input)
 
-        # ── Skill 路由 ──
+        # Skill 路由
         ctx = {
             "memory": self.memory,
             "personality": self.personality,
@@ -228,10 +203,8 @@ class EvolvingAgent:
 
             return response
 
-        # ── 无 Skill 匹配，走 LLM ──
+        # LLM 对话
         system_prompt = self._build_system_prompt(user_input)
-
-        # 情绪适配指令追加
         emotion_instruction = self.emotion_sensor.get_response_instruction(emotion_result)
         if emotion_instruction:
             system_prompt += f"\n\n【此刻情绪适配】\n{emotion_instruction}"
@@ -241,7 +214,6 @@ class EvolvingAgent:
             max_turns=self.agent_cfg.get("max_short_term_turns", 10)
         )
 
-        # 根据人格 + mood 动态调整 LLM 参数
         temperature = self.personality.get_temperature()
         temperature += self.mood.get_temperature_adjustment()
         temperature = max(0.1, min(1.0, temperature))
@@ -255,7 +227,6 @@ class EvolvingAgent:
         )
 
     def _detect_quick_feedback(self, text: str) -> str:
-        """快速判断用户反馈类型，供 mood 使用"""
         lowered = text.lower()
         if any(s in lowered for s in ["不对", "错了", "纠正", "应该是", "你误解"]):
             return "correction"
@@ -266,7 +237,6 @@ class EvolvingAgent:
         return "neutral"
 
     def _flush_learning_logs(self):
-        """将后台线程积累的学习日志一次性打印"""
         with self._log_lock:
             if self._learning_logs:
                 for msg in self._learning_logs:
@@ -274,7 +244,6 @@ class EvolvingAgent:
                 self._learning_logs.clear()
 
     def _background_learn(self, messages: List[Dict]):
-        """后台线程：执行会话级学习，结果写入日志队列"""
         log_msg = ""
         try:
             result = self.learner.learn_from_session(messages)
@@ -284,6 +253,8 @@ class EvolvingAgent:
                 if merged:
                     log_msg += f"，合并 {merged} 条"
                 log_msg += f"，更新 {result['profile_updates']} 项画像"
+                if result.get("triples"):
+                    log_msg += f"，图谱 {len(result['triples'])} 个三元组"
             else:
                 log_msg = f"🧠 [后台学习完成] {result.get('reason', '没有新内容')}"
         except Exception as e:
@@ -294,16 +265,13 @@ class EvolvingAgent:
             self._learning_thread = None
 
     def end_session(self) -> Optional[Dict]:
-        """结束会话并触发后台学习"""
         if not self.session_active:
             return None
 
         messages = self.memory.short_term.copy()
 
-        # 记录关系事件
         if messages:
             self._record_relationship_event(messages)
-            # 情绪趋势
             trend = self.emotion_sensor.get_session_emotion_trend()
             if trend:
                 logger.info(f"  [情绪趋势: {trend}]")
@@ -332,12 +300,9 @@ class EvolvingAgent:
         return {}
 
     def _record_relationship_event(self, messages: List[Dict]):
-        """从会话中提取关系事件"""
-        # 简单启发式：根据对话特征判断事件类型
         user_msgs = [m["content"] for m in messages if m["role"] == "user"]
         all_text = " ".join(user_msgs).lower()
 
-        # 判断事件类型
         event_type = "routine"
         sentiment = 0.0
         desc = "日常对话"
@@ -370,8 +335,10 @@ class EvolvingAgent:
         self.relationship.add_event(event_type, desc, sentiment)
 
     def finalize_response(self, user_input: str, response: str):
-        """流式输出结束后，记录回复并触发实时学习"""
+        """流式输出结束后，记录回复并触发实时学习 + 增量学习"""
         self.memory.add_turn("assistant", response)
+
+        # ── 实时信号学习 ──
         try:
             logs = self.signal_learner.on_turn_complete(user_input, response)
             if logs:
@@ -381,8 +348,67 @@ class EvolvingAgent:
         except Exception:
             pass
 
+        # ── 增量学习（每轮都学，不用等 /bye） ──
+        try:
+            incremental_result = self.learner.learn_from_turn(user_input, response)
+            if incremental_result.get("learned"):
+                logger.info(f"  [增量学习] 新知识: {incremental_result['new_knowledge']} 条, "
+                           f"画像: {incremental_result['profile_updates']} 项")
+        except Exception as e:
+            logger.debug(f"增量学习跳过: {e}")
+
+        # ── 反馈闭环：调整知识 confidence ──
+        self._apply_feedback_to_knowledge(user_input, response)
+
+    def _apply_feedback_to_knowledge(self, user_input: str, response: str):
+        """
+        自监督反馈闭环：
+        - 用户表扬 → 提升相关知识的 confidence
+        - 用户纠正 → 降低相关知识的 confidence，标记为待修正
+        """
+        feedback_type = self._detect_quick_feedback(user_input)
+
+        if feedback_type == "positive":
+            # 召回与本轮对话相关的知识，提升 confidence
+            related = self.memory.search_knowledge(query=user_input + " " + response, limit=3)
+            for k in related:
+                if "_confidence" not in k:
+                    k["_confidence"] = 0.7
+                k["_confidence"] = min(1.0, k["_confidence"] + 0.05)
+                k["access_count"] = k.get("access_count", 0) + 2
+            if related:
+                self.storage.save_json(self.memory.knowledge_base, "knowledge_base.json", self.memory.knowledge_path)
+                logger.info(f"  [反馈闭环] 用户认可，提升 {len(related)} 条知识权重")
+
+        elif feedback_type == "correction":
+            # 召回与 assistant_response 相关的知识，降低 confidence
+            related = self.memory.search_knowledge(query=response, limit=3)
+            for k in related:
+                if "_confidence" not in k:
+                    k["_confidence"] = 0.7
+                k["_confidence"] = max(0.1, k["_confidence"] - 0.2)
+                k["_status"] = "corrected"
+                k["_correction_note"] = user_input
+            if related:
+                self.storage.save_json(self.memory.knowledge_base, "knowledge_base.json", self.memory.knowledge_path)
+                logger.info(f"  [反馈闭环] 用户纠正，降低 {len(related)} 条知识权重并标记")
+
+            # 同时尝试把纠正内容作为新知识写入
+            try:
+                self.memory.add_knowledge(
+                    category="lesson",
+                    content=f"用户纠正: {user_input} (原回复: {response[:100]})",
+                    source="user_correction"
+                )
+            except Exception:
+                pass
+
     def get_stats(self) -> Dict:
-        """获取 Agent 成长统计"""
+        kg_stats = {}
+        if self.memory.knowledge_graph:
+            kg_stats = {
+                "triples_count": len(self.memory.knowledge_graph.triples),
+            }
         return {
             "name": self.name,
             "total_sessions": self.memory.session_count,
@@ -393,8 +419,8 @@ class EvolvingAgent:
             "personality": self.personality.get_all(),
             "temperature": self.personality.get_temperature(),
             "max_tokens": self.personality.get_max_tokens(),
+            **kg_stats,
         }
 
     def get_personality_summary(self) -> str:
-        """获取人格状态摘要"""
         return self.personality.summary()
