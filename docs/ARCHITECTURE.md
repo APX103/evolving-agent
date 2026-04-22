@@ -403,3 +403,66 @@ storage/
 ```
 
 所有 JSON 文件通过 `LocalJsonStorage` 原子写入（`.tmp` → `os.replace`），并保留 `.bak` 备份，崩溃后可恢复。
+
+
+---
+
+## 11. 演进路线图（2026-2027）
+
+基于与行业最佳实践（LangGraph、CrewAI、OpenAI Agents SDK、MCP 生态等）的差距分析，制定以下四阶段演进路线。
+
+### Phase 1：基础设施现代化（1-2 个月）
+> 目标：让 Agent 从"只能对话"进化为"能执行任务"
+
+| 项目 | 当前状态 | 目标状态 | 关键技术 |
+|------|----------|----------|----------|
+| **MCP 协议支持** | 5 个手写 Skill | 接入数百个标准化工具 | `agent/mcp_client.py` |
+| **任务规划** | 单轮 ReAct | Plan-and-Execute 分离 | PlanningFlow |
+| **代码执行** | `eval`（不安全） | Docker/e2b 沙箱 | `PythonExecute` |
+| **浏览器自动化** | 无 | Playwright/Selenium | `BrowserTool` |
+| **结构化输出** | 手动 `json.loads()` | Pydantic 强制校验 | `response_model=...` |
+| **人工审批** | 直接执行 | 敏感操作暂停确认 | Human-in-the-Loop |
+
+### Phase 2：记忆与可观测性升级（2-3 个月）
+> 目标：让 Agent 更可靠、更可控
+
+| 项目 | 当前状态 | 目标状态 | 关键技术 |
+|------|----------|----------|----------|
+| **多用户隔离** | Config 单例 + 固定路径 | user_id/session_id/run_id 作用域 | `MemoryScope` |
+| **程序记忆** | 只能记事实 | 能记"怎么做" | `ProceduralMemory` |
+| **Checkpoint** | 失败重来 | 断点续跑 | `CheckpointManager` |
+| **决策追踪** | 看日志猜 | 可视化决策链 | OpenTelemetry / 自定义 Tracer |
+| **上下文压缩** | 直接截断 | 智能摘要保留关键信息 | `ContextCompressor` |
+
+### Phase 3：高级推理与多 Agent（3-6 个月）
+> 目标：突破单 Agent 能力天花板
+
+| 项目 | 当前状态 | 目标状态 | 关键技术 |
+|------|----------|----------|----------|
+| **树搜索推理** | 单轨迹 | ToT / LATS 多路径探索 | MCTS + ReAct |
+| **多 Agent 编排** | 单 Agent | Planner + Executor + Specialist | Handoff / 图编排 |
+| **Skill Library** | 每次重新推理 | 沉淀可复用技能 | 代码/工作流复用 |
+| **A2A 协议** | 孤立系统 | 与其他 Agent 互操作 | Agent Cards |
+
+### Phase 4：自我进化（6-12 个月）
+> 目标：让 Agent 真正"学会学习"
+
+| 项目 | 当前状态 | 目标状态 | 关键技术 |
+|------|----------|----------|----------|
+| **RL 优化** | 固定策略 | 基于反馈的显式奖励优化 | GRPO / PPO |
+| **元认知** | 被动学习 | 主动改进学习策略 | Meta-Learning |
+| **领域微调** | 通用模型 | 情感/陪伴专用模型 | SFT + RLHF |
+
+---
+
+## 12. 相关文档索引
+
+| 文档 | 内容 |
+|------|------|
+| `README.md` | 项目简介与快速开始 |
+| `docs/ARCHITECTURE.md` | 本文档：完整架构设计与数据流 |
+| `docs/KNOWLEDGE_SYSTEM_V2.md` | 知识提炼系统 v2.0 设计文档 |
+| `docs/OPTIMIZATION.md` | 当前代码的优化项与 Bug 清单 |
+| `docs/GAP_ANALYSIS.md` | 与行业最佳实践的差距分析 |
+| `tests/TEST_REPORT.md` | 测试进度报告 |
+| `tests/MANUAL_TEST.md` | 手动测试手册 |
