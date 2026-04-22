@@ -122,7 +122,7 @@
 ├─────────────┼─────────────┼─────────────────────────────────┤
 │ 当前会话    │  本次关键点  │  跨会话知识 + 向量语义索引 + 图谱  │
 │ List[dict]  │   Dict[str]  │   List[dict] + np.ndarray        │
-│ 内存中      │   内存中     │  JSON + NPY + NetworkX 本地持久化 │
+│ 内存中      │   内存中     │  JSON + NPY + 图谱本地持久化      │
 │ 会话结束    │  会话结束    │   永久（自动老化清理）            │
 │ 归档到文件  │   随会话归档  │   反思时 cleanup_stale_knowledge │
 └─────────────┴─────────────┴─────────────────────────────────┘
@@ -211,7 +211,7 @@ search_knowledge(query)
 
 ### 5.3 知识图谱（KnowledgeGraph）
 
-- **存储**：NetworkX 有向图 + 本地 JSON（`storage/knowledge/graph/triples.json`），零外部依赖。
+- **存储**：纯 Python 有向图 + 本地 JSON（`storage/knowledge/graph/triples.json`），零外部依赖。
 - **数据模型**：`Triple(subject, predicate, object, temporal_state, confidence, source, created_at, updated_at, access_count)`。
 - **时态标记**：
   - `current`：当前有效（默认）
