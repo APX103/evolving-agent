@@ -14,6 +14,7 @@ from agent.llm.base import LLMClient
 from agent.memory import MemoryManager
 from agent.quality_judge import QualityJudge
 from agent.knowledge_graph import Triple
+from agent.structured_output import ExtractedKnowledgeItem, StructuredOutputExtractor
 
 
 # ── Few-shot 示例（结构化版本） ──
@@ -172,6 +173,11 @@ class Learner:
 
 只返回 JSON 数组，不要其他文字。"""
 
+        extractor = StructuredOutputExtractor(self.llm_client)
+        items = extractor.extract_list(ExtractedKnowledgeItem, prompt)
+        if items:
+            return [item.model_dump() for item in items]
+        # fallback: 保留旧的手动解析
         return self._parse_json_list(self.llm_client.quick_chat(prompt))
 
     # ── 会话级学习（保留，用于 /bye 后的深度复盘） ──

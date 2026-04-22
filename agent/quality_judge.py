@@ -3,20 +3,13 @@ LLM-as-Judge 质量过滤层
 用第二个 LLM 评估提取结果的可信度，减少幻觉和错误
 """
 import json
+import logging
 from typing import Dict, List, Optional
-from dataclasses import dataclass
 
 from agent.llm.base import LLMClient
+from agent.structured_output import JudgmentResultItem, StructuredOutputExtractor
 
-
-@dataclass
-class JudgmentResult:
-    """质检结果"""
-    index: int
-    is_valid: bool
-    confidence: float       # 0-1
-    reason: str             # 判断理由
-    issue_type: Optional[str]  # hallucination | subject_confusion | temporal_error | unsupported
+logger = logging.getLogger(__name__)
 
 
 class QualityJudge:
@@ -57,8 +50,9 @@ class QualityJudge:
 
     def __init__(self, llm_client: LLMClient):
         self.llm_client = llm_client
+        self.extractor = StructuredOutputExtractor(llm_client)
 
-    def judge(self, extracted_items: List[Dict], source_text: str) -> List[JudgmentResult]:
+    def judge(self, extracted_items: List[Dict], source_text: str) -> List[JudgmentResultItem]:
         """
         对提取结果进行质量评估
         """
@@ -76,53 +70,23 @@ class QualityJudge:
         )
 
         try:
-            response = self.llm_client.quick_chat(
-                prompt,
-                system="你只返回 JSON 数组，不做任何解释。"
-            )
-            results = self._parse_judgment(response, len(extracted_items))
-            return results
-        except Exception as e:
-            print(f"[QualityJudge] 质检失败: {e}")
-            # 质检失败时，全部通过（保守策略）
-            return [
-                JudgmentResult(i, True, 0.7, "质检未执行，默认通过", None)
-                for i in range(len(extracted_items))
-            ]
-
-    def _parse_judgment(self, text: str, expected_count: int) -> List[JudgmentResult]:
-        """解析质检 JSON"""
-        try:
-            cleaned = text.strip()
-            if cleaned.startswith("```json"):
-                cleaned = cleaned[7:]
-            if cleaned.startswith("```"):
-                cleaned = cleaned[3:]
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3]
-            cleaned = cleaned.strip()
-
-            data = json.loads(cleaned)
-            if not isinstance(data, list):
-                data = []
-
-            results = []
-            for i in range(expected_count):
-                item = data[i] if i < len(data) else {}
-                results.append(JudgmentResult(
-                    index=item.get("index", i),
-                    is_valid=item.get("is_valid", True),
-                    confidence=float(item.get("confidence", 0.7)),
-                    reason=item.get("reason", "无说明"),
-                    issue_type=item.get("issue_type") or None
+            results = self.extractor.extract_list(JudgmentResultItem, prompt, system="你只返回 JSON 数组，不做任何解释。")
+            # 补齐缺失的条目（默认通过）
+            while len(results) < len(extracted_items):
+                results.append(JudgmentResultItem(
+                    index=len(results),
+                    is_valid=True,
+                    confidence=0.7,
+                    reason="质检未执行，默认通过",
+                    issue_type=None
                 ))
             return results
-
         except Exception as e:
-            print(f"[QualityJudge] 解析质检结果失败: {e}")
+            logger.warning(f"[QualityJudge] 质检失败: {e}")
+            # 质检失败时，全部通过（保守策略）
             return [
-                JudgmentResult(i, True, 0.7, "解析失败，默认通过", None)
-                for i in range(expected_count)
+                JudgmentResultItem(index=i, is_valid=True, confidence=0.7, reason="质检未执行，默认通过", issue_type=None)
+                for i in range(len(extracted_items))
             ]
 
     def filter_valid(self, extracted_items: List[Dict], source_text: str) -> List[Dict]:
@@ -139,7 +103,11 @@ class QualityJudge:
                 item["_judge_reason"] = judgment.reason
                 valid_items.append(item)
             else:
-                print(f"[QualityJudge] 过滤低质量知识: {item.get('content', item)[:50]}... "
-                      f"原因: {judgment.reason}")
+                content_preview = item.get("content", "")
+                if isinstance(content_preview, str):
+                    content_preview = content_preview[:50]
+                else:
+                    content_preview = str(content_preview)[:50]
+                logger.info(f"[QualityJudge] 过滤低质量知识: {content_preview}... 原因: {judgment.reason}")
 
         return valid_items

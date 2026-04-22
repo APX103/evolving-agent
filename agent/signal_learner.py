@@ -13,6 +13,7 @@ from agent.memory import MemoryManager
 from agent.quality_judge import QualityJudge
 from agent.semantic_detector import SemanticSignalDetector
 from agent.knowledge_graph import Triple
+from agent.structured_output import ExtractedKnowledgeItem, StructuredOutputExtractor
 
 
 # ── 保留正则作为 fallback ──
@@ -219,33 +220,40 @@ class SignalLearner:
         action = config.get("action")
 
         if action == "add_knowledge":
-            # 结构化提取 + 质量过滤
+            # 结构化提取 + 质量过滤（使用 Pydantic 强制校验）
             prompt = self._build_extraction_prompt(signal_type, extracted)
-            refined = self.llm_client.quick_chat(prompt, system="你只输出 JSON，不要解释。").strip().strip("\"'")
+            extractor = StructuredOutputExtractor(self.llm_client)
+            items = extractor.extract_list(ExtractedKnowledgeItem, prompt, system="你只输出 JSON，不要解释。")
 
-            if len(refined) > 5:
-                # 尝试解析为结构化知识
-                structured = self._try_parse_structured(refined, config.get("category", "fact"))
-                # 质量过滤
-                source_text = f"用户说: {full_input}"
-                filtered = self.quality_judge.filter_valid([structured], source_text)
+            if items:
+                structured_list = [item.model_dump() for item in items]
+            else:
+                # fallback: 手动解析
+                refined = self.llm_client.quick_chat(prompt, system="你只输出 JSON，不要解释。").strip().strip("\"'")
+                if len(refined) <= 5:
+                    return None
+                structured_list = [self._try_parse_structured(refined, config.get("category", "fact"))]
 
-                if filtered:
-                    item = filtered[0]
-                    # 尝试存为三元组
-                    triple = self._item_to_triple(item, signal_type)
-                    if triple and self.memory.knowledge_graph:
-                        added = self.memory.knowledge_graph.add(triple)
-                        if added:
-                            return f"kg:{triple.predicate}:{triple.object}"
+            # 质量过滤
+            source_text = f"用户说: {full_input}"
+            filtered = self.quality_judge.filter_valid(structured_list, source_text)
 
-                    # fallback 到传统知识库
-                    result = self.memory.add_knowledge(
-                        category=item.get("category", "fact"),
-                        content=item.get("content", refined),
-                        source=f"signal:{signal_type}"
-                    )
-                    return result["action"]
+            if filtered:
+                item = filtered[0]
+                # 尝试存为三元组
+                triple = self._item_to_triple(item, signal_type)
+                if triple and self.memory.knowledge_graph:
+                    added = self.memory.knowledge_graph.add(triple)
+                    if added:
+                        return f"kg:{triple.predicate}:{triple.object}"
+
+                # fallback 到传统知识库
+                result = self.memory.add_knowledge(
+                    category=item.get("category", "fact"),
+                    content=item.get("content", extracted),
+                    source=f"signal:{signal_type}"
+                )
+                return result["action"]
             return None
 
         elif action == "update_profile":
