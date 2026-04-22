@@ -44,13 +44,30 @@ approval:
     - "file_write"
     - "mcp:filesystem:write"
 
-# 记忆存储路径
-storage:
-  base_path: "./storage"
-  conversations: "./storage/conversations"
-  knowledge: "./storage/knowledge"
-  user_profile: "./storage/user_profile"
-  reflections: "./storage/reflections"
-  personality: "./storage/personality"
-  relationship: "./storage/relationship"
-  mood: "./storage/mood"
+# 多 Agent 协作配置 (v4.0+)
+ multi_agent:
+   enabled: true                       # 启用多 Agent 模式
+   default_agent: "companion"          # 默认 Agent
+   router_temperature: 0.3             # Router 意图分类温度
+   context_budget: 3500                # 上下文总预算 (tokens)
+   session_ttl: 1800                   # 会话超时 (秒)
+
+ # 飞书机器人配置 (v4.0+)
+ feishu:
+   enabled: false                      # 是否启用飞书机器人
+   app_id: "cli_xxxxxxxx"             # 飞书应用 ID
+   app_secret: "xxxxxxxx"             # 飞书应用密钥
+   encrypt_key: ""                     # 加密密钥（可选）
+   verification_token: ""              # 验证令牌（可选）
+   bot_name: "Evo"                     # 机器人名称（群聊 @用）
+
+ # 记忆存储路径
+ storage:
+   base_path: "./storage"
+   conversations: "./storage/conversations"
+   knowledge: "./storage/knowledge"
+   user_profile: "./storage/user_profile"
+   reflections: "./storage/reflections"
+   personality: "./storage/personality"
+   relationship: "./storage/relationship"
+   mood: "./storage/mood"
