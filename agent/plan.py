@@ -46,17 +46,22 @@ class Plan:
 
     def get_next_pending(self) -> Optional[Step]:
         """获取下一个可执行的 pending 步骤（所有依赖已完成）"""
+        ready = self.get_ready_steps()
+        return ready[0] if ready else None
+
+    def get_ready_steps(self) -> List[Step]:
+        """获取所有当前可执行的 pending 步骤（依赖全部成功完成）"""
+        ready = []
         for s in self.steps:
             if s.status != StepStatus.PENDING:
                 continue
-            # 检查依赖是否都已完成
             deps_satisfied = all(
                 self.get_step(dep_id) and self.get_step(dep_id).status == StepStatus.SUCCESS
                 for dep_id in s.depends_on
             )
             if deps_satisfied:
-                return s
-        return None
+                ready.append(s)
+        return ready
 
     def is_complete(self) -> bool:
         return all(s.status in (StepStatus.SUCCESS, StepStatus.FAILED) for s in self.steps)

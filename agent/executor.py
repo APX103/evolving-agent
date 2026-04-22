@@ -1,9 +1,10 @@
 """
 计划执行器
-按顺序执行 Plan 的每个 Step，管理状态流转
+支持串行 + 并行步骤执行，管理状态流转
 """
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, Optional
 
 from agent.llm.base import LLMClient
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 class Executor:
     """
     计划执行器
+    支持并行执行无依赖关系的步骤（通过 ThreadPoolExecutor）
     """
 
     def __init__(
@@ -25,36 +27,71 @@ class Executor:
         mcp_client: Optional[MCPClient] = None,
         skills=None,
         sandbox: Optional[PythonSandbox] = None,
+        max_workers: int = 4,
     ):
         self.llm_client = llm_client
         self.mcp_client = mcp_client
         self.skills = skills
         self.sandbox = sandbox or PythonSandbox()
         self.max_retries = 2
+        self.max_workers = max_workers
 
     def run(self, plan: Plan) -> Plan:
         """
         执行完整计划
+        每轮找出所有可并行执行的步骤，用线程池并发执行
         返回执行后的 Plan（包含每步结果）
         """
         logger.info(f"[Executor] 开始执行计划: {plan.task}")
         plan.status = StepStatus.RUNNING
 
         while not plan.is_complete():
-            step = plan.get_next_pending()
-            if step is None:
+            ready_steps = plan.get_ready_steps()
+            if not ready_steps:
                 # 没有 pending 步骤但有未完成的（说明有循环依赖或死锁）
+                unresolved = [s for s in plan.steps if s.status == StepStatus.PENDING]
+                if unresolved:
+                    logger.error(f"[Executor] 死锁/循环依赖: {len(unresolved)} 步无法执行")
+                    for s in unresolved:
+                        s.status = StepStatus.FAILED
+                        s.error = "依赖无法满足（循环依赖或前置步骤失败）"
                 break
 
-            self._execute_step(plan, step)
+            if len(ready_steps) == 1:
+                # 只有一步，串行执行（避免线程开销）
+                self._execute_step(plan, ready_steps[0])
+            else:
+                # 多步并行执行
+                logger.info(f"[Executor] 并行执行 {len(ready_steps)} 步: {[s.id for s in ready_steps]}")
+                self._execute_steps_parallel(plan, ready_steps)
 
         plan.status = StepStatus.SUCCESS if plan.is_success() else StepStatus.FAILED
         plan.summary = self._generate_summary(plan)
         logger.info(f"[Executor] 计划执行完成: {plan.status.value}")
         return plan
 
+    def _execute_steps_parallel(self, plan: Plan, steps: list):
+        """并行执行多个步骤"""
+        with ThreadPoolExecutor(max_workers=min(len(steps), self.max_workers)) as pool:
+            future_to_step = {
+                pool.submit(self._execute_step_worker, plan, step): step
+                for step in steps
+            }
+            for future in as_completed(future_to_step):
+                step = future_to_step[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error(f"[Executor] Step {step.id} 并行执行异常: {e}")
+                    step.status = StepStatus.FAILED
+                    step.error = str(e)
+
     def _execute_step(self, plan: Plan, step: Step):
-        """执行单个步骤"""
+        """执行单个步骤（同步包装）"""
+        self._execute_step_worker(plan, step)
+
+    def _execute_step_worker(self, plan: Plan, step: Step):
+        """执行单个步骤的核心逻辑"""
         logger.info(f"[Executor] Step {step.id}: {step.description} [{step.tool}]")
         step.status = StepStatus.RUNNING
 
@@ -73,12 +110,12 @@ class Executor:
             if step.retry_count <= self.max_retries:
                 step.status = StepStatus.RETRYING
                 logger.warning(f"[Executor] Step {step.id} 失败，重试 {step.retry_count}/{self.max_retries}: {e}")
-                # 简单重试：同样的参数再试一次
                 try:
                     result = self._invoke_tool(step.tool, arguments, step.description)
                     step.result = str(result) if result is not None else ""
                     step.status = StepStatus.SUCCESS
                     step.error = None
+                    logger.info(f"[Executor] Step {step.id} 重试成功")
                 except Exception as e2:
                     step.error = f"{e} -> 重试失败: {e2}"
                     step.status = StepStatus.FAILED

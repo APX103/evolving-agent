@@ -29,6 +29,7 @@ from agent.executor import Executor
 from agent.plan import Plan, StepStatus
 from agent.checkpoint import CheckpointManager
 from agent.procedural_memory import ProceduralMemory
+from agent.approval import ApprovalManager
 
 logger = logging.getLogger("agent.core")
 
@@ -82,7 +83,11 @@ class EvolvingAgent:
             storage=self.storage,
         )
 
-        self.skills = build_default_skills()
+        # 审批管理器
+        approval_cfg = self.config.raw.get("approval", {})
+        self.approval_mgr = ApprovalManager(config=approval_cfg, mode=approval_cfg.get("mode", "blocking"))
+
+        self.skills = build_default_skills(approval=self.approval_mgr)
 
         # ── MCP 集成 ──
         self.mcp_client: Optional[MCPClient] = None

@@ -187,6 +187,9 @@ class ShellSkill(Skill):
     triggers = ["/sh", r"r:执行[\s]*(.+)", r"r:运行[\s]*(.+)"]
     priority = 60
 
+    def __init__(self, approval: Optional[ApprovalManager] = None):
+        self.approval = approval or ApprovalManager(mode="blocking")
+
     # 允许的安全命令白名单（精确匹配第一个 token）
     ALLOWED_CMDS = [
         "ls", "cat", "head", "tail", "grep", "find", "wc",
@@ -309,7 +312,7 @@ class PythonSkill(Skill):
             )
 
 
-def build_default_skills():
+def build_default_skills(approval: Optional[ApprovalManager] = None):
     """构建默认 Skill 集合"""
     from agent.skill import SkillRegistry
 
@@ -319,6 +322,6 @@ def build_default_skills():
     registry.register(PythonSkill())
     registry.register(FileReadSkill())
     registry.register(FileWriteSkill())
-    registry.register(ShellSkill())
+    registry.register(ShellSkill(approval))
 
     return registry
