@@ -17,6 +17,7 @@ from agent.llm.base import LLMClient
 from agent.storage.base import StorageBackend
 from agent.storage.local_json import LocalJsonStorage
 from agent.knowledge_graph import KnowledgeGraph
+from agent.context_compressor import ContextCompressor
 
 
 class MemoryManager:
@@ -32,6 +33,7 @@ class MemoryManager:
         config: Optional[Config] = None,
         storage: Optional[StorageBackend] = None,
         llm_client: Optional[LLMClient] = None,
+        base_path: Optional[str] = None,
     ):
         cfg = config or Config()
         self.config = cfg
@@ -39,7 +41,7 @@ class MemoryManager:
 
         self.storage = storage or LocalJsonStorage()
 
-        self.base_path = storage_cfg.get("base_path", "./storage")
+        self.base_path = base_path or storage_cfg.get("base_path", "./storage")
         self.conv_path = storage_cfg.get("conversations", os.path.join(self.base_path, "conversations"))
         self.knowledge_path = storage_cfg.get("knowledge", os.path.join(self.base_path, "knowledge"))
         self.profile_path = storage_cfg.get("user_profile", os.path.join(self.base_path, "user_profile"))
@@ -77,6 +79,13 @@ class MemoryManager:
         if self._vectors is None and self.knowledge_base:
             logger.info(f"[Memory] 检测到 {len(self.knowledge_base)} 条知识，重建向量索引...")
             self._build_all_vectors()
+
+        # 上下文压缩器
+        max_turns = self.config.agent.get("max_short_term_turns", 10)
+        self.context_compressor = ContextCompressor(
+            llm_client=self.llm_client,
+            max_turns=max_turns,
+        )
 
     def _new_session_id(self) -> str:
         return datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -156,7 +165,9 @@ class MemoryManager:
     def get_short_term(self, max_turns: int = 10) -> List[Dict[str, Any]]:
         return self.short_term[-max_turns:]
 
-    def get_context_messages(self, system_prompt: str, max_turns: int = 10) -> List[Dict[str, str]]:
+    def get_context_messages(self, system_prompt: str, max_turns: int = 10, compress: bool = True) -> List[Dict[str, str]]:
+        if compress and self.context_compressor:
+            return self.context_compressor.get_full_compressed_context(system_prompt, self.short_term)
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(self.get_short_term(max_turns))
         return messages

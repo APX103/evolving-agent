@@ -54,13 +54,16 @@ class MCPClient:
         self._exit_stack: Optional[AsyncExitStack] = None
         self._sessions: Dict[str, ClientSession] = {}
         self._tools: List[MCPTool] = []
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     # ── 连接管理 ──
 
     def connect_all(self) -> Dict[str, bool]:
         """连接所有配置的 MCP Server，返回连接结果"""
         try:
-            return asyncio.run(self._connect_all_async())
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            return self._loop.run_until_complete(self._connect_all_async())
         except Exception as e:
             logger.warning(f"[MCP] 连接失败: {e}")
             return {s.name: False for s in self.servers}
@@ -77,7 +80,6 @@ class MCPClient:
                         args=cfg.args,
                         env=cfg.env,
                     )
-                    # 进入 stdio_client 和 ClientSession 上下文
                     read, write = await self._exit_stack.enter_async_context(stdio_client(params))
                     session = await self._exit_stack.enter_async_context(ClientSession(read, write))
                     await session.initialize()
@@ -91,7 +93,6 @@ class MCPClient:
                 results[cfg.name] = False
                 logger.warning(f"[MCP] 连接 server '{cfg.name}' 失败: {e}")
 
-        # 刷新工具列表
         if any(results.values()):
             await self._refresh_tools_async()
 
@@ -99,15 +100,18 @@ class MCPClient:
 
     def disconnect_all(self):
         """断开所有连接"""
-        if self._exit_stack:
+        if self._exit_stack and self._loop and not self._loop.is_closed():
             try:
-                asyncio.run(self._exit_stack.aclose())
+                self._loop.run_until_complete(self._exit_stack.aclose())
             except Exception as e:
                 logger.warning(f"[MCP] 断开连接时出错: {e}")
             finally:
                 self._exit_stack = None
                 self._sessions.clear()
                 self._tools.clear()
+        if self._loop and not self._loop.is_closed():
+            self._loop.close()
+            self._loop = None
 
     # ── 工具发现 ──
 
@@ -122,10 +126,15 @@ class MCPClient:
             try:
                 result = await session.list_tools()
                 for tool in result.tools:
+                    schema = {}
+                    if hasattr(tool, "inputSchema"):
+                        schema = tool.inputSchema or {}
+                    elif isinstance(tool, dict):
+                        schema = tool.get("inputSchema", {})
                     all_tools.append(MCPTool(
-                        name=tool.name,
-                        description=tool.description or "",
-                        input_schema=tool.inputSchema or {},
+                        name=getattr(tool, "name", tool.get("name", "")) if isinstance(tool, dict) else tool.name,
+                        description=(getattr(tool, "description", tool.get("description", "")) if isinstance(tool, dict) else tool.description) or "",
+                        input_schema=schema,
                         server=name,
                     ))
             except Exception as e:
@@ -137,7 +146,9 @@ class MCPClient:
     def call_tool(self, server_name: str, tool_name: str, arguments: Dict) -> MCPCallResult:
         """调用指定 MCP tool（同步包装）"""
         try:
-            return asyncio.run(self._call_tool_async(server_name, tool_name, arguments))
+            if self._loop is None or self._loop.is_closed():
+                return MCPCallResult(success=False, content=None, error="MCP 未连接")
+            return self._loop.run_until_complete(self._call_tool_async(server_name, tool_name, arguments))
         except Exception as e:
             logger.warning(f"[MCP] 调用 tool '{tool_name}' 失败: {e}")
             return MCPCallResult(success=False, content=None, error=str(e))
@@ -149,7 +160,6 @@ class MCPClient:
 
         result = await session.call_tool(tool_name, arguments=arguments)
 
-        # 提取文本内容
         texts = []
         for content in result.content:
             if isinstance(content, TextContent):
@@ -157,7 +167,6 @@ class MCPClient:
             else:
                 texts.append(str(content))
 
-        # 检查是否有错误
         if result.isError:
             return MCPCallResult(
                 success=False,

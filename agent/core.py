@@ -28,12 +28,14 @@ from agent.planner import Planner
 from agent.executor import Executor
 from agent.plan import Plan, StepStatus
 from agent.checkpoint import CheckpointManager
+from agent.procedural_memory import ProceduralMemory
 
 logger = logging.getLogger("agent.core")
 
 
 class EvolvingAgent:
-    def __init__(self, config_path: str = "config.yaml"):
+    def __init__(self, config_path: str = "config.yaml", user_id: str = "default"):
+        self.user_id = user_id
         self.config = Config(config_path)
         self.agent_cfg = self.config.agent
         self.name = self.agent_cfg.get("name", "Evo")
@@ -41,17 +43,22 @@ class EvolvingAgent:
         self.storage = LocalJsonStorage()
         self.llm_client = KimiLLMClient(self.config)
 
+        # 多用户隔离：按 user_id 生成独立存储目录
+        storage_base = self.config.storage.get("base_path", "./storage")
+        user_storage_base = os.path.join(storage_base, user_id)
+        self.storage.ensure_dir(user_storage_base)
+
         self.memory = MemoryManager(
             config=self.config,
             storage=self.storage,
             llm_client=self.llm_client,
+            base_path=user_storage_base,
         )
         self.learner = Learner(self.llm_client, self.memory)
         self.reflector = Reflector(self.llm_client, self.memory)
 
-        storage_base = self.config.storage.get("base_path", "./storage")
         self.personality = PersonalityEngine(
-            storage_path=self.config.storage.get("personality", f"{storage_base}/personality"),
+            storage_path=os.path.join(user_storage_base, "personality"),
             storage=self.storage,
         )
         self.signal_learner = SignalLearner(
@@ -61,11 +68,17 @@ class EvolvingAgent:
 
         self.emotion_sensor = EmotionSensor(self.llm_client)
         self.relationship = RelationshipLog(
-            storage_path=self.config.storage.get("relationship", f"{storage_base}/relationship"),
+            storage_path=os.path.join(user_storage_base, "relationship"),
             storage=self.storage,
         )
         self.mood = AgentMood(
-            storage_path=self.config.storage.get("mood", f"{storage_base}/mood"),
+            storage_path=os.path.join(user_storage_base, "mood"),
+            storage=self.storage,
+        )
+
+        # 程序记忆
+        self.procedural_memory = ProceduralMemory(
+            storage_path=os.path.join(user_storage_base, "procedural_memory"),
             storage=self.storage,
         )
 
@@ -85,7 +98,7 @@ class EvolvingAgent:
 
         # ── Checkpoint 集成 ──
         self.checkpoint_mgr = CheckpointManager(
-            base_path=os.path.join(storage_base, "checkpoints")
+            base_path=os.path.join(user_storage_base, "checkpoints")
         )
 
         self.session_active = False
@@ -159,6 +172,11 @@ class EvolvingAgent:
         context = self.memory.get_relevant_context(query_hint=query_hint, limit=5)
         if context:
             parts.append(f"\n{context}")
+
+        # 注入程序记忆（行为策略）
+        procedural = self.procedural_memory.get_prompt_text(query_hint)
+        if procedural:
+            parts.append(f"\n{procedural}")
 
         parts.append("\n【行为指南】")
         parts.append("- 自然对话，不需要过度礼貌")
@@ -469,8 +487,18 @@ class EvolvingAgent:
         自监督反馈闭环：
         - 用户表扬 → 提升相关知识的 confidence
         - 用户纠正 → 降低相关知识的 confidence，标记为待修正
+        - 同时更新程序记忆（行为策略）
         """
         feedback_type = self._detect_quick_feedback(user_input)
+
+        # 程序记忆学习
+        try:
+            correction = ""
+            if feedback_type == "correction":
+                correction = user_input
+            self.procedural_memory.learn_from_feedback(user_input, response, feedback_type, correction)
+        except Exception:
+            pass
 
         if feedback_type == "positive":
             # 召回与本轮对话相关的知识，提升 confidence

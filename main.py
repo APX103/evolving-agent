@@ -1,10 +1,11 @@
 """
 CLI 入口
-运行方式: python main.py
+运行方式: python main.py [--user <user_id>]
 """
 import sys
 import os
 import logging
+import argparse
 
 # 将项目根目录加入路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -59,6 +60,10 @@ def print_banner():
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Evolving Agent CLI")
+    parser.add_argument("--user", default="default", help="用户 ID（多用户隔离）")
+    args = parser.parse_args()
+
     setup_logging()
     print_banner()
 
@@ -72,7 +77,7 @@ def main():
 
     # 初始化 Agent
     try:
-        agent = EvolvingAgent("config.yaml")
+        agent = EvolvingAgent("config.yaml", user_id=args.user)
     except Exception as e:
         print(f"❌ 初始化失败: {e}")
         print("请检查 config.yaml 中的 API Key 是否正确。")
