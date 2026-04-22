@@ -1,0 +1,155 @@
+"""
+关系档案
+记录"你和 Agent 之间的故事"，不只是用户画像，而是关系演化史
+"""
+import json
+import os
+from datetime import datetime, timedelta
+from typing import List, Dict, Optional
+
+
+class RelationshipLog:
+    """
+    关系日志：记录双方互动中的关键事件，构建关系档案
+    """
+
+    EVENT_TYPES = {
+        "first_meet": "初次见面",
+        "deep_talk": "深入交流",
+        "problem_solved": "共同解决问题",
+        "user_praised": "用户表扬",
+        "user_corrected": "用户纠正",
+        "user_frustrated": "用户不满",
+        "joke_shared": "共同玩笑",
+        "vulnerability": "用户袒露脆弱",
+        "milestone": "重要节点",
+        "routine": "日常闲聊",
+    }
+
+    def __init__(self, storage_path: str = "./storage/relationship"):
+        self.storage_path = storage_path
+        os.makedirs(storage_path, exist_ok=True)
+
+        self.events_file = os.path.join(storage_path, "events.json")
+        self.events = self._load_events()
+
+        # 关系亲密度 (0-1)，随正面互动增长
+        self.intimacy = self._load_intimacy()
+        self.trust_level = self._load_trust()
+
+    def _load_events(self) -> List[Dict]:
+        if os.path.exists(self.events_file):
+            with open(self.events_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        return []
+
+    def _save_events(self):
+        with open(self.events_file, "w", encoding="utf-8") as f:
+            json.dump(self.events, f, ensure_ascii=False, indent=2)
+
+    def _load_intimacy(self) -> float:
+        meta_file = os.path.join(self.storage_path, "meta.json")
+        if os.path.exists(meta_file):
+            with open(meta_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("intimacy", 0.1)
+        return 0.1  # 默认起步
+
+    def _load_trust(self) -> float:
+        meta_file = os.path.join(self.storage_path, "meta.json")
+        if os.path.exists(meta_file):
+            with open(meta_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("trust_level", 0.2)
+        return 0.2
+
+    def _save_meta(self):
+        meta_file = os.path.join(self.storage_path, "meta.json")
+        with open(meta_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "intimacy": round(self.intimacy, 3),
+                "trust_level": round(self.trust_level, 3),
+                "updated_at": datetime.now().isoformat()
+            }, f, ensure_ascii=False, indent=2)
+
+    def add_event(self, event_type: str, description: str, sentiment: float = 0.0):
+        """
+        记录关系事件
+        sentiment: -1 负面, 0 中性, 1 正面
+        """
+        if event_type not in self.EVENT_TYPES:
+            event_type = "routine"
+
+        event = {
+            "type": event_type,
+            "type_desc": self.EVENT_TYPES[event_type],
+            "description": description,
+            "sentiment": sentiment,
+            "timestamp": datetime.now().isoformat()
+        }
+        self.events.append(event)
+        self._save_events()
+
+        # 更新亲密度和信任度
+        if sentiment > 0.3:
+            self.intimacy = min(1.0, self.intimacy + 0.02)
+            self.trust_level = min(1.0, self.trust_level + 0.015)
+        elif sentiment < -0.3:
+            self.intimacy = max(0.0, self.intimacy - 0.01)
+            self.trust_level = max(0.0, self.trust_level - 0.02)
+
+        self._save_meta()
+
+    def get_recent_events(self, limit: int = 5, days: int = 7) -> List[Dict]:
+        """获取最近的关系事件"""
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        recent = [e for e in self.events if e["timestamp"] > cutoff]
+        return recent[-limit:]
+
+    def get_relationship_context(self) -> str:
+        """生成关系上下文摘要，注入系统 prompt"""
+        parts = []
+
+        # 关系阶段
+        if self.intimacy < 0.2:
+            stage = "刚认识不久"
+        elif self.intimacy < 0.5:
+            stage = "正在熟悉"
+        elif self.intimacy < 0.8:
+            stage = "比较熟悉的朋友"
+        else:
+            stage = "很亲近的伙伴"
+
+        parts.append(f"你和用户的关系阶段：{stage}（亲密度 {self.intimacy:.2f}）")
+
+        # 最近重要事件
+        recent = self.get_recent_events(limit=3)
+        if recent:
+            parts.append("\n最近的重要互动：")
+            for e in recent:
+                emoji = {"user_praised": "🌟", "user_corrected": "🔧", "user_frustrated": "💢",
+                         "deep_talk": "🌊", "joke_shared": "😄", "vulnerability": "💝",
+                         "problem_solved": "🎯", "first_meet": "🤝", "milestone": "🏆"}.get(e["type"], "•")
+                parts.append(f"  {emoji} {e['type_desc']}: {e['description'][:60]}")
+
+        # 信任度影响
+        if self.trust_level < 0.3:
+            parts.append("\n用户对你还在观察期，回复要更加谨慎可靠。")
+        elif self.trust_level > 0.8:
+            parts.append("\n用户很信任你，可以稍微大胆一些，开开玩笑也没关系。")
+
+        return "\n".join(parts)
+
+    def get_follow_up_items(self) -> List[str]:
+        """提取需要后续跟进的事项"""
+        # 简单启发式：找包含"待确认""下次""之后""到时候"等词的事件
+        items = []
+        for e in self.events[-20:]:
+            desc = e["description"].lower()
+            if any(kw in desc for kw in ["待确认", "下次", "之后", "到时候", "改天", "回头"]):
+                items.append(e["description"])
+        return items[-5:]  # 最近 5 个
+
+    def clear_session(self):
+        """清空本次会话的情绪历史（ emotion 模块调用）"""
+        pass  # relationship log 没有 per-session 状态

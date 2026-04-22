@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Evolving Agent</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <style>
+        .message-enter {
+            animation: fadeIn 0.3s ease-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .typing-dot {
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+        .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+        .stream-cursor::after {
+            content: '|';
+            animation: blink 1s infinite;
+            color: #10b981;
+        }
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+        .chat-scroll {
+            scroll-behavior: smooth;
+        }
+        .chat-scroll::-webkit-scrollbar {
+            width: 6px;
+        }
+        .chat-scroll::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .chat-scroll::-webkit-scrollbar-thumb {
+            background: #d1d5db;
+            border-radius: 3px;
+        }
+        .dark .chat-scroll::-webkit-scrollbar-thumb {
+            background: #4b5563;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 h-screen overflow-hidden">
+    <div class="flex h-full">
+        <!-- 左侧边栏 -->
+        <aside class="w-64 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col">
+            <!-- Logo -->
+            <div class="p-4 border-b border-gray-200 dark:border-gray-700">
+                <div class="flex items-center gap-2">
+                    <div class="w-8 h-8 bg-gradient-to-br from-emerald-400 to-teal-600 rounded-lg flex items-center justify-center text-white font-bold text-sm">
+                        Evo
+                    </div>
+                    <div>
+                        <h1 class="font-semibold text-sm">Evolving Agent</h1>
+                        <p class="text-xs text-gray-500 dark:text-gray-400">越聊越聪明</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 会话列表 -->
+            <div class="flex-1 overflow-y-auto p-3">
+                <div class="text-xs text-gray-500 dark:text-gray-400 mb-2 px-2">当前会话</div>
+                <button id="new-chat-btn" class="w-full text-left px-3 py-2 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 text-sm hover:bg-emerald-100 dark:hover:bg-emerald-900/30 transition mb-2">
+                    + 新对话
+                </button>
+            </div>
+            
+            <!-- 状态面板 -->
+            <div class="p-4 border-t border-gray-200 dark:border-gray-700 space-y-3">
+                <div class="text-xs text-gray-500 dark:text-gray-400 font-medium">Agent 状态</div>
+                
+                <!-- 情绪 -->
+                <div id="status-emotion" class="hidden">
+                    <div class="flex items-center gap-2 text-xs">
+                        <span class="w-2 h-2 rounded-full bg-blue-400"></span>
+                        <span class="text-gray-600 dark:text-gray-300" id="emotion-label">平静</span>
+                    </div>
+                </div>
+                
+                <!-- 人格雷达图（简化：条形） -->
+                <div id="status-personality" class="space-y-1.5">
+                    <div class="text-xs text-gray-400">人格参数加载中...</div>
+                </div>
+                
+                <!-- Mood -->
+                <div id="status-mood" class="text-xs text-gray-500 dark:text-gray-400 hidden">
+                    <span id="mood-text">--</span>
+                </div>
+                
+                <!-- 统计 -->
+                <div class="flex justify-between text-xs text-gray-400 pt-1 border-t border-gray-200 dark:border-gray-700">
+                    <span>会话 <span id="stat-sessions">0</span></span>
+                    <span>知识 <span id="stat-knowledge">0</span></span>
+                </div>
+            </div>
+        </aside>
+        
+        <!-- 右侧聊天区 -->
+        <main class="flex-1 flex flex-col">
+            <!-- 顶部栏 -->
+            <header class="h-14 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 bg-white dark:bg-gray-800">
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-emerald-500" id="connection-indicator"></span>
+                    <span class="text-sm font-medium">Evo</span>
+                </div>
+                <div class="flex items-center gap-3">
+                    <button id="cmd-bye" class="text-xs px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition" title="结束会话并学习">
+                        /bye
+                    </button>
+                    <button id="cmd-stats" class="text-xs px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition" title="查看统计">
+                        /stats
+                    </button>
+                </div>
+            </header>
+            
+            <!-- 消息区 -->
+            <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-4 chat-scroll">
+                <!-- 欢迎消息 -->
+                <div class="flex gap-3 message-enter">
+                    <div class="w-8 h-8 bg-gradient-to-br from-emerald-400 to-teal-600 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0">
+                        Evo
+                    </div>
+                    <div class="bg-white dark:bg-gray-800 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm border border-gray-100 dark:border-gray-700 max-w-3xl">
+                        <p class="text-sm">你好！我是 Evo，一个会不断学习和进化的 AI 助手。</p>
+                        <p class="text-sm text-gray-600 dark:text-gray-300 mt-1">每次对话后我都会复盘学习，所以我会越来越了解你。随便聊聊吧~</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 输入区 -->
+            <div class="p-4 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700">
+                <div class="max-w-4xl mx-auto relative">
+                    <textarea 
+                        id="chat-input"
+                        rows="1"
+                        class="w-full px-4 py-3 pr-14 rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-sm"
+                        placeholder="输入你想说的话，Shift+Enter 换行，Enter 发送..."
+                    ></textarea>
+                    <button 
+                        id="send-btn"
+                        class="absolute right-2 bottom-2 w-9 h-9 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg flex items-center justify-center transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="max-w-4xl mx-auto mt-1.5 text-xs text-gray-400 flex justify-between">
+                    <span>支持 /bye /stats /personality 命令</span>
+                    <span id="input-stats"></span>
+                </div>
+            </div>
+        </main>
+    </div>
+    
+    <script>
+        // ── 状态管理 ──
+        const clientId = 'user_' + Math.random().toString(36).substr(2, 9);
+        let ws = null;
+        let isConnected = false;
+        let isStreaming = false;
+        let currentStreamDiv = null;
+        
+        // ── DOM 元素 ──
+        const chatMessages = document.getElementById('chat-messages');
+        const chatInput = document.getElementById('chat-input');
+        const sendBtn = document.getElementById('send-btn');
+        const connectionIndicator = document.getElementById('connection-indicator');
+        const newChatBtn = document.getElementById('new-chat-btn');
+        
+        // ── WebSocket 连接 ──
+        function connect() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/${clientId}`;
+            
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                isConnected = true;
+                connectionIndicator.classList.remove('bg-red-500', 'bg-yellow-500');
+                connectionIndicator.classList.add('bg-emerald-500');
+                addSystemMessage('已连接');
+            };
+            
+            ws.onclose = () => {
+                isConnected = false;
+                connectionIndicator.classList.remove('bg-emerald-500');
+                connectionIndicator.classList.add('bg-red-500');
+                addSystemMessage('连接断开，5秒后重连...');
+                setTimeout(connect, 5000);
+            };
+            
+            ws.onerror = (err) => {
+                console.error('WebSocket error:', err);
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                handleMessage(data);
+            };
+        }
+        
+        // ── 消息处理 ──
+        function handleMessage(data) {
+            switch (data.type) {
+                case 'thinking':
+                    if (data.content) showTyping();
+                    else hideTyping();
+                    break;
+                    
+                case 'stream':
+                    appendStreamChunk(data.chunk);
+                    break;
+                    
+                case 'message':
+                    if (data.done) {
+                        finalizeStream(data.content);
+                    } else {
+                        addMessage(data.role, data.content);
+                    }
+                    break;
+                    
+                case 'system':
+                    addSystemMessage(data.content);
+                    break;
+                    
+                case 'stats':
+                    addStatsMessage(data.data);
+                    break;
+                    
+                case 'status':
+                    updateStatus(data);
+                    break;
+                    
+                case 'error':
+                    addSystemMessage(data.content, 'error');
+                    break;
+            }
+        }
+        
+        // ── UI 操作 ──
+        function addMessage(role, content, isStream = false) {
+            const div = document.createElement('div');
+            div.className = 'flex gap-3 message-enter';
+            
+            const isUser = role === 'user';
+            const avatarBg = isUser 
+                ? 'bg-gray-300 dark:bg-gray-600' 
+                : 'bg-gradient-to-br from-emerald-400 to-teal-600';
+            const avatarText = isUser ? '你' : 'Evo';
+            const bubbleClass = isUser 
+                ? 'bg-emerald-500 text-white rounded-2xl rounded-tr-md' 
+                : 'bg-white dark:bg-gray-800 rounded-2xl rounded-tl-md shadow-sm border border-gray-100 dark:border-gray-700';
+            
+            div.innerHTML = `
+                <div class="w-8 h-8 ${avatarBg} rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0">
+                    ${avatarText}
+                </div>
+                <div class="${bubbleClass} px-4 py-3 max-w-3xl prose prose-sm dark:prose-invert">
+                    ${isStream ? '<span class="stream-content"></span><span class="stream-cursor"></span>' : marked.parse(content)}
+                </div>
+            `;
+            
+            chatMessages.appendChild(div);
+            scrollToBottom();
+            
+            if (isStream) {
+                currentStreamDiv = div.querySelector('.stream-content');
+                isStreaming = true;
+            }
+            
+            // 代码高亮
+            div.querySelectorAll('pre code').forEach((block) => {
+                hljs.highlightElement(block);
+            });
+            
+            return div;
+        }
+        
+        function appendStreamChunk(chunk) {
+            if (!currentStreamDiv) {
+                addMessage('assistant', '', true);
+            }
+            currentStreamDiv.textContent += chunk;
+            scrollToBottom();
+        }
+        
+        function finalizeStream(fullContent) {
+            isStreaming = false;
+            if (currentStreamDiv) {
+                const parent = currentStreamDiv.closest('.prose');
+                parent.innerHTML = marked.parse(fullContent);
+                parent.querySelectorAll('pre code').forEach((block) => {
+                    hljs.highlightElement(block);
+                });
+            }
+            currentStreamDiv = null;
+            scrollToBottom();
+        }
+        
+        function showTyping() {
+            const div = document.createElement('div');
+            div.id = 'typing-indicator';
+            div.className = 'flex gap-3 message-enter';
+            div.innerHTML = `
+                <div class="w-8 h-8 bg-gradient-to-br from-emerald-400 to-teal-600 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0">
+                    Evo
+                </div>
+                <div class="bg-white dark:bg-gray-800 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm border border-gray-100 dark:border-gray-700">
+                    <div class="flex gap-1">
+                        <span class="w-2 h-2 bg-gray-400 rounded-full typing-dot"></span>
+                        <span class="w-2 h-2 bg-gray-400 rounded-full typing-dot"></span>
+                        <span class="w-2 h-2 bg-gray-400 rounded-full typing-dot"></span>
+                    </div>
+                </div>
+            `;
+            chatMessages.appendChild(div);
+            scrollToBottom();
+        }
+        
+        function hideTyping() {
+            const el = document.getElementById('typing-indicator');
+            if (el) el.remove();
+        }
+        
+        function addSystemMessage(content, level = 'info') {
+            const div = document.createElement('div');
+            div.className = 'flex justify-center message-enter';
+            const color = level === 'error' ? 'text-red-500 bg-red-50 dark:bg-red-900/20' : 'text-gray-500 bg-gray-100 dark:bg-gray-800';
+            div.innerHTML = `<span class="text-xs px-3 py-1 rounded-full ${color}">${content}</span>`;
+            chatMessages.appendChild(div);
+            scrollToBottom();
+        }
+        
+        function addStatsMessage(data) {
+            const div = document.createElement('div');
+            div.className = 'flex justify-center message-enter';
+            div.innerHTML = `
+                <div class="bg-gray-100 dark:bg-gray-800 rounded-xl px-4 py-3 text-xs space-y-1 max-w-md">
+                    <div class="font-medium text-emerald-600 dark:text-emerald-400">📊 成长统计</div>
+                    <div>会话数: ${data.total_sessions}</div>
+                    <div>知识库: ${data.knowledge_count} 条</div>
+                    <div>反思次数: ${data.reflection_count}</div>
+                    <div>当前温度: ${data.temperature}</div>
+                </div>
+            `;
+            chatMessages.appendChild(div);
+            scrollToBottom();
+        }
+        
+        function updateStatus(data) {
+            // 人格参数
+            const pContainer = document.getElementById('status-personality');
+            const dims = data.personality || {};
+            const dimNames = {
+                verbosity: '啰嗦', formality: '正式', humor: '幽默',
+                confidence: '自信', proactive: '主动', warmth: '温暖',
+                technical: '技术', directness: '直接'
+            };
+            pContainer.innerHTML = Object.entries(dims).map(([k, v]) => {
+                const pct = Math.round(v * 100);
+                return `
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-gray-500 w-8">${dimNames[k] || k}</span>
+                        <div class="flex-1 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                            <div class="h-full bg-emerald-500 rounded-full transition-all" style="width: ${pct}%"></div>
+                        </div>
+                        <span class="text-xs text-gray-400 w-8 text-right">${pct}</span>
+                    </div>
+                `;
+            }).join('');
+            
+            // 情绪
+            if (data.emotion) {
+                document.getElementById('status-emotion').classList.remove('hidden');
+                document.getElementById('emotion-label').textContent = 
+                    `${data.emotion.label} (${Math.round(data.emotion.intensity * 100)}%)`;
+            }
+            
+            // Mood
+            if (data.mood) {
+                document.getElementById('status-mood').classList.remove('hidden');
+                document.getElementById('mood-text').textContent = data.mood;
+            }
+            
+            // 统计
+            document.getElementById('stat-sessions').textContent = data.sessions || 0;
+            document.getElementById('stat-knowledge').textContent = data.knowledge || 0;
+        }
+        
+        function scrollToBottom() {
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+        
+        // ── 发送消息 ──
+        function sendMessage() {
+            const text = chatInput.value.trim();
+            if (!text || !isConnected || isStreaming) return;
+            
+            addMessage('user', text);
+            chatInput.value = '';
+            chatInput.style.height = 'auto';
+            
+            ws.send(JSON.stringify({ text }));
+        }
+        
+        // ── 事件绑定 ──
+        sendBtn.addEventListener('click', sendMessage);
+        
+        chatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+        
+        chatInput.addEventListener('input', () => {
+            chatInput.style.height = 'auto';
+            chatInput.style.height = Math.min(chatInput.scrollHeight, 200) + 'px';
+        });
+        
+        newChatBtn.addEventListener('click', () => {
+            chatMessages.innerHTML = '';
+            addSystemMessage('新会话已开始');
+            if (ws) {
+                ws.send(JSON.stringify({ text: '/bye' }));
+            }
+        });
+        
+        document.getElementById('cmd-bye').addEventListener('click', () => {
+            ws.send(JSON.stringify({ text: '/bye' }));
+        });
+        
+        document.getElementById('cmd-stats').addEventListener('click', () => {
+            ws.send(JSON.stringify({ text: '/stats' }));
+        });
+        
+        // ── 启动 ──
+        connect();
+        
+        // 暗黑模式检测
+        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.classList.add('dark');
+        }
+    </script>
+</body>
+</html>
