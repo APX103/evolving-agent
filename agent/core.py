@@ -22,6 +22,8 @@ from agent.emotion import EmotionSensor
 from agent.relationship import RelationshipLog
 from agent.mood import AgentMood
 from agent.storage.local_json import LocalJsonStorage
+from agent.mcp_client import MCPClient, MCPServerConfig
+from agent.mcp_tool_skill import MCPRouterSkill, MCPToolSkill
 
 logger = logging.getLogger("agent.core")
 
@@ -65,12 +67,56 @@ class EvolvingAgent:
 
         self.skills = build_default_skills()
 
+        # ── MCP 集成 ──
+        self.mcp_client: Optional[MCPClient] = None
+        self._init_mcp()
+
         self.session_active = False
         self._learning_thread: Optional[threading.Thread] = None
         self._learning_logs: List[str] = []
         self._log_lock = threading.Lock()
 
         self.event_bus = default_bus
+
+    def _init_mcp(self):
+        """初始化 MCP Client，连接配置的 MCP Servers"""
+        mcp_cfg = self.config.raw.get("mcp", {})
+        if not mcp_cfg.get("enabled", False):
+            return
+
+        servers = []
+        for s in mcp_cfg.get("servers", []):
+            try:
+                servers.append(MCPServerConfig(
+                    name=s["name"],
+                    transport=s.get("transport", "stdio"),
+                    command=s.get("command"),
+                    args=s.get("args", []),
+                    url=s.get("url"),
+                    env=s.get("env", {}),
+                ))
+            except Exception as e:
+                logger.warning(f"[MCP] 解析 server 配置失败: {e}")
+
+        if not servers:
+            return
+
+        self.mcp_client = MCPClient(servers)
+        results = self.mcp_client.connect_all()
+        for name, ok in results.items():
+            status = "✅" if ok else "❌"
+            logger.info(f"[MCP] {status} {name}")
+
+        # 将 MCP tools 注册为 Skill
+        if self.mcp_client:
+            tools = self.mcp_client.list_tools()
+            for tool in tools:
+                self.skills.register(MCPToolSkill(
+                    self.mcp_client, tool.name, tool.description, tool.server
+                ))
+            # 注册 MCP 路由 Skill
+            self.skills.register(MCPRouterSkill(self.mcp_client, self.llm_client))
+            logger.info(f"[MCP] 已注册 {len(tools)} 个 MCP tools + 1 个路由 Skill")
 
     def _build_system_prompt(self, query_hint: str = "") -> str:
         parts = []
