@@ -9,6 +9,7 @@ import logging
 
 from simpleeval import simple_eval
 from agent.skill import Skill, SkillResult
+from agent.sandbox import PythonSandbox
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +261,41 @@ class ShellSkill(Skill):
             return SkillResult(content=f"❌ 执行失败: {e}", success=False)
 
 
+class PythonSkill(Skill):
+    """Python 代码执行 Skill：安全沙箱执行多行 Python 代码"""
+    name = "python"
+    description = "执行 Python 代码（安全沙箱）"
+    triggers = ["/python", r"r:用?Python[\s]*(.+)"]
+    priority = 75
+
+    def __init__(self):
+        self.sandbox = PythonSandbox()
+
+    def can_handle(self, user_input: str, context: Dict) -> bool:
+        return self._match_triggers(user_input)
+
+    def execute(self, user_input: str, context: Dict) -> SkillResult:
+        # 提取代码
+        code = user_input.replace("/python", "").strip()
+        if not code:
+            return SkillResult(content="请提供 Python 代码，例如 `/python print([i**2 for i in range(5)])`")
+
+        result = self.sandbox.execute(code)
+        if result.success:
+            output = result.output or "(无输出)"
+            info = f"⏱️ {result.execution_time_ms}ms"
+            return SkillResult(
+                content=f"```python\n{code}\n```\n```\n{output}\n```\n{info}",
+                metadata={"code": code, "time_ms": result.execution_time_ms}
+            )
+        else:
+            return SkillResult(
+                content=f"```python\n{code}\n```\n❌ {result.error}",
+                success=False,
+                metadata={"code": code, "error": result.error}
+            )
+
+
 def build_default_skills():
     """构建默认 Skill 集合"""
     from agent.skill import SkillRegistry
@@ -267,6 +303,7 @@ def build_default_skills():
     registry = SkillRegistry()
     registry.register(EchoSkill())
     registry.register(CalcSkill())
+    registry.register(PythonSkill())
     registry.register(FileReadSkill())
     registry.register(FileWriteSkill())
     registry.register(ShellSkill())
