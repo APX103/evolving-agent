@@ -7,7 +7,7 @@
 - 支持知识图谱三元组
 """
 import json
-from typing import Dict, List
+from typing import Dict, List, Optional
 from datetime import datetime
 
 from agent.llm.base import LLMClient
