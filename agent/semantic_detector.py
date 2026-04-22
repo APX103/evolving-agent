@@ -4,8 +4,11 @@
 """
 import os
 import json
+import logging
 from typing import Dict, List, Optional, Tuple
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 from agent.llm.base import LLMClient
 
@@ -81,16 +84,16 @@ class SemanticSignalDetector:
                 with open(cache_path, "r", encoding="utf-8") as f:
                     cached = json.load(f)
                 if cached == self.intent_examples:
-                    self._anchor_vectors = {
-                        k: np.load(vec_cache_path)[i]
-                        for i, k in enumerate(self.intent_examples.keys())
-                    }
-                    return
+                    # 使用 npz 带 key 存储，避免顺序依赖
+                    loaded = np.load(vec_cache_path, allow_pickle=False)
+                    if all(k in loaded for k in self.intent_examples.keys()):
+                        self._anchor_vectors = {k: loaded[k] for k in self.intent_examples.keys()}
+                        return
             except Exception:
                 pass
 
         # 重新构建锚点：每个意图的示例取平均向量
-        print("[SemanticDetector] 构建意图锚点向量...")
+        logger.info("[SemanticDetector] 构建意图锚点向量...")
         for intent, examples in self.intent_examples.items():
             try:
                 vecs = self.llm_client.embed(examples)
@@ -99,11 +102,11 @@ class SemanticSignalDetector:
                 anchor = anchor / (np.linalg.norm(anchor) + 1e-8)
                 self._anchor_vectors[intent] = anchor
             except Exception as e:
-                print(f"[SemanticDetector] 意图 '{intent}' 向量构建失败: {e}")
+                logger.warning(f"[SemanticDetector] 意图 '{intent}' 向量构建失败: {e}")
 
-        # 保存缓存
+        # 保存缓存（使用 npz 带 key 存储）
         if self._anchor_vectors:
-            np.save(vec_cache_path, np.stack(list(self._anchor_vectors.values())))
+            np.savez(vec_cache_path, **self._anchor_vectors)
             with open(cache_path, "w", encoding="utf-8") as f:
                 json.dump(self.intent_examples, f, ensure_ascii=False, indent=2)
 
@@ -116,7 +119,7 @@ class SemanticSignalDetector:
             anchor = anchor / (np.linalg.norm(anchor) + 1e-8)
             self._anchor_vectors[intent_name] = anchor
         except Exception as e:
-            print(f"[SemanticDetector] 添加意图 '{intent_name}' 失败: {e}")
+            logger.warning(f"[SemanticDetector] 添加意图 '{intent_name}' 失败: {e}")
 
     def detect(self, text: str, threshold: float = 0.78) -> Optional[Tuple[str, float]]:
         """
@@ -144,7 +147,7 @@ class SemanticSignalDetector:
             return None
 
         except Exception as e:
-            print(f"[SemanticDetector] 检测失败: {e}")
+            logger.warning(f"[SemanticDetector] 检测失败: {e}")
             return None
 
     def detect_top_k(self, text: str, k: int = 3) -> List[Tuple[str, float]]:
@@ -165,5 +168,5 @@ class SemanticSignalDetector:
             return scores[:k]
 
         except Exception as e:
-            print(f"[SemanticDetector] top-k 检测失败: {e}")
+            logger.warning(f"[SemanticDetector] top-k 检测失败: {e}")
             return []

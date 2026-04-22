@@ -3,6 +3,7 @@
 支持向量语义检索 + 知识去重合并 + 记忆老化 + 知识图谱
 """
 import json
+import logging
 import os
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -10,6 +11,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from agent.config import Config
+
+logger = logging.getLogger(__name__)
 from agent.llm.base import LLMClient
 from agent.storage.base import StorageBackend
 from agent.storage.local_json import LocalJsonStorage
@@ -72,7 +75,7 @@ class MemoryManager:
         # 加载或构建向量索引
         self._vectors = self._load_vectors()
         if self._vectors is None and self.knowledge_base:
-            print(f"[Memory] 检测到 {len(self.knowledge_base)} 条知识，重建向量索引...")
+            logger.info(f"[Memory] 检测到 {len(self.knowledge_base)} 条知识，重建向量索引...")
             self._build_all_vectors()
 
     def _new_session_id(self) -> str:
@@ -87,9 +90,9 @@ class MemoryManager:
                 if len(meta) == len(self.knowledge_base) == len(vecs):
                     return vecs
                 else:
-                    print(f"[Memory] 向量索引长度不一致，重建中...")
+                    logger.info(f"[Memory] 向量索引长度不一致，重建中...")
             except Exception as e:
-                print(f"[Memory] 加载向量失败: {e}")
+                logger.info(f"[Memory] 加载向量失败: {e}")
         return None
 
     def _save_vectors(self):
@@ -106,9 +109,9 @@ class MemoryManager:
         try:
             self._vectors = self.llm_client.embed(texts)
             self._save_vectors()
-            print(f"[Memory] 向量索引重建完成: {len(texts)} 条")
+            logger.info(f"[Memory] 向量索引重建完成: {len(texts)} 条")
         except Exception as e:
-            print(f"[Memory] 向量重建失败: {e}")
+            logger.info(f"[Memory] 向量重建失败: {e}")
             self._vectors = None
 
     def _append_vector(self, text: str):
@@ -122,7 +125,7 @@ class MemoryManager:
                 self._vectors = np.vstack([self._vectors, vec])
             self._save_vectors()
         except Exception as e:
-            print(f"[Memory] 追加向量失败: {e}")
+            logger.info(f"[Memory] 追加向量失败: {e}")
 
     def _rebuild_vector_for(self, item: Dict[str, Any]):
         if not self._embedding_available or self._vectors is None:
@@ -139,7 +142,7 @@ class MemoryManager:
             self._vectors[idx] = vec[0]
             self._save_vectors()
         except Exception as e:
-            print(f"[Memory] 单条向量重建失败: {e}")
+            logger.info(f"[Memory] 单条向量重建失败: {e}")
 
     # ── 短期记忆 ──
     def add_turn(self, role: str, content: str):
@@ -208,7 +211,9 @@ class MemoryManager:
         for item in self.knowledge_base:
             if content_lower == item["content"].lower():
                 return item
-            if len(content) > 15 and len(item["content"]) > 15:
+            # 子串匹配：双方内容均需 ≥10 字符，避免短文本过度匹配
+            min_len = 10
+            if len(content) >= min_len and len(item["content"]) >= min_len:
                 if content_lower in item["content"].lower() or item["content"].lower() in content_lower:
                     return item
 
@@ -258,7 +263,7 @@ class MemoryManager:
                     updated_any = True
                     results.append({**item, "_similarity": round(sim, 3)})
             except Exception as e:
-                print(f"[Memory] 向量搜索失败: {e}")
+                logger.info(f"[Memory] 向量搜索失败: {e}")
 
         if len(results) < limit // 2 and query:
             for item in self.knowledge_base:
@@ -337,7 +342,7 @@ class MemoryManager:
                 else:
                     self._vectors = self._vectors[kept_indices]
                 self._save_vectors()
-            print(f"[Memory] 清理 {removed} 条陈旧知识，剩余 {len(kept)} 条")
+            logger.info(f"[Memory] 清理 {removed} 条陈旧知识，剩余 {len(kept)} 条")
         return removed
 
     # ── 会话管理 ──

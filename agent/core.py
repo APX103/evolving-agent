@@ -216,7 +216,7 @@ class EvolvingAgent:
 
         temperature = self.personality.get_temperature()
         temperature += self.mood.get_temperature_adjustment()
-        temperature = max(0.1, min(1.0, temperature))
+        temperature = max(0.0, min(1.0, temperature))
         max_tokens = self.personality.get_max_tokens()
 
         return self.llm_client.chat(

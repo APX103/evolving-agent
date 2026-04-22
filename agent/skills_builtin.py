@@ -5,8 +5,12 @@ import os
 import re
 import subprocess
 from typing import Dict
+import logging
 
+from simpleeval import simple_eval
 from agent.skill import Skill, SkillResult
+
+logger = logging.getLogger(__name__)
 
 
 class EchoSkill(Skill):
@@ -54,9 +58,9 @@ class CalcSkill(Skill):
             return SkillResult(content="表达式包含不安全字符，我只支持基本数学运算。", success=False)
 
         try:
-            # 替换 ^ 为 **，然后用受限 eval
+            # 使用 simpleeval 替代 eval，消除逃逸风险
             safe_expr = expr.replace("^", "**")
-            result = eval(safe_expr, {"__builtins__": None}, {})
+            result = simple_eval(safe_expr)
             return SkillResult(
                 content=f"🧮 {expr} = {result}",
                 metadata={"expr": expr, "result": result}

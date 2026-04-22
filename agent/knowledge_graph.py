@@ -4,10 +4,13 @@
 支持关系推理和时序状态追踪
 """
 import json
+import logging
 import os
 from typing import Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass, asdict
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -71,7 +74,7 @@ class KnowledgeGraph:
                     data = json.load(f)
                 return [Triple.from_dict(t) for t in data]
             except Exception as e:
-                print(f"[KnowledgeGraph] 加载失败: {e}")
+                logger.warning(f"[KnowledgeGraph] 加载失败: {e}")
         return []
 
     def _save_triples(self):

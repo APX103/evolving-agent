@@ -74,9 +74,11 @@ class KimiLLMClient(LLMClient):
                 msg = response.choices[0].message
                 return msg.content or getattr(msg, "reasoning_content", None) or ""
         except Exception as e:
+            error_msg = f"[Kimi API 错误] {str(e)}"
             if stream:
-                return self._error_generator(str(e))
-            return f"[Kimi API 错误] {str(e)}"
+                # 返回字符串而非生成器，让调用方统一处理
+                return error_msg
+            return error_msg
 
     def _stream_generator(self, response) -> Generator[str, None, None]:
         for chunk in response:
