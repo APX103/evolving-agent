@@ -1,0 +1,173 @@
+"""
+计划执行器
+按顺序执行 Plan 的每个 Step，管理状态流转
+"""
+import logging
+import re
+from typing import Any, Dict, Optional
+
+from agent.llm.base import LLMClient
+from agent.plan import Plan, Step, StepStatus
+from agent.mcp_client import MCPClient
+from agent.sandbox import PythonSandbox
+
+logger = logging.getLogger(__name__)
+
+
+class Executor:
+    """
+    计划执行器
+    """
+
+    def __init__(
+        self,
+        llm_client: LLMClient,
+        mcp_client: Optional[MCPClient] = None,
+        skills=None,
+        sandbox: Optional[PythonSandbox] = None,
+    ):
+        self.llm_client = llm_client
+        self.mcp_client = mcp_client
+        self.skills = skills
+        self.sandbox = sandbox or PythonSandbox()
+        self.max_retries = 2
+
+    def run(self, plan: Plan) -> Plan:
+        """
+        执行完整计划
+        返回执行后的 Plan（包含每步结果）
+        """
+        logger.info(f"[Executor] 开始执行计划: {plan.task}")
+        plan.status = StepStatus.RUNNING
+
+        while not plan.is_complete():
+            step = plan.get_next_pending()
+            if step is None:
+                # 没有 pending 步骤但有未完成的（说明有循环依赖或死锁）
+                break
+
+            self._execute_step(plan, step)
+
+        plan.status = StepStatus.SUCCESS if plan.is_success() else StepStatus.FAILED
+        plan.summary = self._generate_summary(plan)
+        logger.info(f"[Executor] 计划执行完成: {plan.status.value}")
+        return plan
+
+    def _execute_step(self, plan: Plan, step: Step):
+        """执行单个步骤"""
+        logger.info(f"[Executor] Step {step.id}: {step.description} [{step.tool}]")
+        step.status = StepStatus.RUNNING
+
+        # 变量替换：将 {{stepN.result}} 替换为实际结果
+        arguments = self._resolve_arguments(step.arguments, plan)
+
+        try:
+            result = self._invoke_tool(step.tool, arguments, step.description)
+            step.result = str(result) if result is not None else ""
+            step.status = StepStatus.SUCCESS
+            logger.info(f"[Executor] Step {step.id} 成功")
+        except Exception as e:
+            step.error = str(e)
+            step.retry_count += 1
+
+            if step.retry_count <= self.max_retries:
+                step.status = StepStatus.RETRYING
+                logger.warning(f"[Executor] Step {step.id} 失败，重试 {step.retry_count}/{self.max_retries}: {e}")
+                # 简单重试：同样的参数再试一次
+                try:
+                    result = self._invoke_tool(step.tool, arguments, step.description)
+                    step.result = str(result) if result is not None else ""
+                    step.status = StepStatus.SUCCESS
+                    step.error = None
+                except Exception as e2:
+                    step.error = f"{e} -> 重试失败: {e2}"
+                    step.status = StepStatus.FAILED
+                    logger.error(f"[Executor] Step {step.id} 重试后仍失败: {e2}")
+            else:
+                step.status = StepStatus.FAILED
+                logger.error(f"[Executor] Step {step.id} 失败（已达最大重试）: {e}")
+
+    def _invoke_tool(self, tool: str, arguments: Dict, context: str = "") -> Any:
+        """调用具体工具"""
+        # LLM 推理
+        if tool == "llm":
+            prompt = arguments.get("prompt", context)
+            return self.llm_client.quick_chat(
+                prompt,
+                system=arguments.get("system", "你是一个有帮助的助手。")
+            )
+
+        # MCP 工具
+        if tool.startswith("mcp:") and self.mcp_client:
+            tool_name = tool[4:]
+            result = self.mcp_client.call_tool_by_name(tool_name, arguments)
+            if result.success:
+                return result.content
+            raise RuntimeError(f"MCP tool '{tool_name}' 失败: {result.error}")
+
+        # Python 沙箱
+        if tool == "sandbox":
+            code = arguments.get("code", arguments.get("input", ""))
+            result = self.sandbox.execute(code)
+            if result.success:
+                return result.output
+            raise RuntimeError(f"沙箱执行失败: {result.error}")
+
+        # 内置 Skill
+        if tool.startswith("skill:") and self.skills:
+            skill_name = tool[6:]
+            # 构造假用户输入
+            fake_input = f"/{skill_name} {arguments.get('input', '')}"
+            handler = self.skills.find_handler(fake_input, {})
+            if handler:
+                result = handler.execute(fake_input, {})
+                return result.content
+            raise RuntimeError(f"Skill '{skill_name}' 未找到")
+
+        # 未知工具
+        raise RuntimeError(f"未知工具: {tool}")
+
+    def _resolve_arguments(self, arguments: Dict, plan: Plan) -> Dict:
+        """
+        解析参数中的变量引用
+        支持 {{stepN.result}} 和 {{stepN.description}}
+        """
+        resolved = {}
+        for key, val in arguments.items():
+            if isinstance(val, str):
+                # 替换 {{stepN.result}}
+                def replacer(match):
+                    ref_id = int(match.group(1))
+                    ref_step = plan.get_step(ref_id)
+                    if ref_step and ref_step.result is not None:
+                        return ref_step.result
+                    return match.group(0)
+                val = re.sub(r"\{\{step(\d+)\.result\}\}", replacer, val)
+                # 替换 {{stepN.description}}
+                def desc_replacer(match):
+                    ref_id = int(match.group(1))
+                    ref_step = plan.get_step(ref_id)
+                    if ref_step:
+                        return ref_step.description
+                    return match.group(0)
+                val = re.sub(r"\{\{step(\d+)\.description\}\}", desc_replacer, val)
+            resolved[key] = val
+        return resolved
+
+    def _generate_summary(self, plan: Plan) -> str:
+        """生成计划执行摘要"""
+        total = len(plan.steps)
+        success = sum(1 for s in plan.steps if s.status == StepStatus.SUCCESS)
+        failed = sum(1 for s in plan.steps if s.status == StepStatus.FAILED)
+
+        parts = [f"计划执行完成: {success}/{total} 步成功"]
+        if failed > 0:
+            parts.append(f"{failed} 步失败")
+
+        # 收集关键结果
+        for s in plan.steps:
+            if s.result and len(s.result) > 0:
+                preview = s.result[:200] + "..." if len(s.result) > 200 else s.result
+                parts.append(f"\n【{s.description}】\n{preview}")
+
+        return "\n".join(parts)

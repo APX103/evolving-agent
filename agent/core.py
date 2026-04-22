@@ -24,6 +24,9 @@ from agent.mood import AgentMood
 from agent.storage.local_json import LocalJsonStorage
 from agent.mcp_client import MCPClient, MCPServerConfig
 from agent.mcp_tool_skill import MCPRouterSkill, MCPToolSkill
+from agent.planner import Planner
+from agent.executor import Executor
+from agent.plan import Plan, StepStatus
 
 logger = logging.getLogger("agent.core")
 
@@ -70,6 +73,14 @@ class EvolvingAgent:
         # ── MCP 集成 ──
         self.mcp_client: Optional[MCPClient] = None
         self._init_mcp()
+
+        # ── PlanningFlow 集成 ──
+        self.planner = Planner(self.llm_client)
+        self.executor = Executor(
+            llm_client=self.llm_client,
+            mcp_client=self.mcp_client,
+            skills=self.skills,
+        )
 
         self.session_active = False
         self._learning_thread: Optional[threading.Thread] = None
@@ -217,6 +228,34 @@ class EvolvingAgent:
         )
 
         self.memory.add_turn("user", user_input)
+
+        # ── PlanningFlow 路由 ──
+        # 显式 /plan 命令 或 自动判断需要规划
+        is_explicit_plan = user_input.strip().startswith("/plan ")
+        should_auto_plan = self.planner.should_plan(user_input)
+
+        if is_explicit_plan or should_auto_plan:
+            task = user_input.replace("/plan", "").strip() if is_explicit_plan else user_input
+            logger.info(f"  [PlanningFlow] 任务规划: {task[:60]}...")
+            plan = self.planner.decompose(task)
+
+            if plan and plan.steps:
+                logger.info(f"  [PlanningFlow] 生成 {len(plan.steps)} 步计划")
+                plan = self.executor.run(plan)
+                response = plan.summary or "计划执行完成。"
+
+                # 记录执行结果
+                self.memory.add_turn("assistant", response)
+                try:
+                    self.signal_learner.on_turn_complete(user_input, response)
+                except Exception:
+                    pass
+
+                # 如果是流式调用方，需要包装为生成器
+                def _plan_generator(text):
+                    yield text
+                return _plan_generator(response)
+            # plan 为 None 表示不需要规划，继续走正常流程
 
         # Skill 路由
         ctx = {
