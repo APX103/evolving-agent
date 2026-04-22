@@ -118,11 +118,11 @@
 │                        三层记忆架构                           │
 ├─────────────┬─────────────┬─────────────────────────────────┤
 │   短期记忆   │   工作记忆   │           长期记忆               │
-│  short_term │ working_mem │      knowledge_base + vectors    │
+│  short_term │ working_mem │  knowledge_base + vectors + graph │
 ├─────────────┼─────────────┼─────────────────────────────────┤
-│ 当前会话    │  本次关键点  │   跨会话知识 + 向量语义索引        │
+│ 当前会话    │  本次关键点  │  跨会话知识 + 向量语义索引 + 图谱  │
 │ List[dict]  │   Dict[str]  │   List[dict] + np.ndarray        │
-│ 内存中      │   内存中     │   JSON + NPY 本地持久化          │
+│ 内存中      │   内存中     │  JSON + NPY + NetworkX 本地持久化 │
 │ 会话结束    │  会话结束    │   永久（自动老化清理）            │
 │ 归档到文件  │   随会话归档  │   反思时 cleanup_stale_knowledge │
 └─────────────┴─────────────┴─────────────────────────────────┘
@@ -141,10 +141,15 @@ add_knowledge(content)
     │       ├── 命中 → merge_content() → rebuild_vector → save
     │       └── 未命中 → 继续
     │
-    └── 3. 新增
-            ├── 生成 ID，append 到 knowledge_base
-            ├── save_json(knowledge_base)
-            └── _append_vector(content) → save_vectors()
+    ├── 3. 新增
+    │       ├── 生成 ID，append 到 knowledge_base
+    │       ├── save_json(knowledge_base)
+    │       └── _append_vector(content) → save_vectors()
+    │
+    └── 4. 知识图谱化（同步）
+            ├── KnowledgeExtractor 提取结构化三元组
+            ├── KnowledgeGraph.add(triple) → 去重/更新 confidence
+            └── _save_triples()
 ```
 
 ### 知识读取链路（search_knowledge）
@@ -178,24 +183,55 @@ search_knowledge(query)
 ### 5.1 实时信号学习（SignalLearner）
 
 - **触发时机**：每轮对话完成后 `finalize_response()` 中调用。
-- **检测机制**：正则模式匹配用户输入，捕获"请记住...""我喜欢...""我叫...""不对..."等信号。
+- **检测机制**：**语义信号检测（SemanticSignalDetector）** —— 用 Embedding 向量匹配替代正则，捕捉语言变体。
+  - 预定义意图锚点向量（remember / preference_positive / preference_negative / identity / correction / urgency / gratitude / frustration）。
+  - 用户输入与锚点计算余弦相似度，> 0.78 即命中。
+  - 支持中英混合， `"我比较偏爱火锅"` 也能命中 preference_positive。
 - **执行动作**：
-  - `add_knowledge`：调用 LLM 精炼提取内容，写入长期记忆。
+  - `KnowledgeExtractor.extract_structured()`：强制 LLM 输出 JSON Schema（subject/predicate/object/confidence/temporal_state）。
+  - `QualityJudge.filter_valid()`：第二遍 LLM 质检，过滤幻觉、主客体混淆、时态错误。
+  - `add_knowledge` + `KnowledgeGraph.add()`：写入扁平知识库 + 三元组图谱。
   - `update_profile`：提取身份信息，更新用户画像。
   - `feedback_positive/negative`：触发人格微调。
-- **开销**：每次命中信号都调用一次 `quick_chat()`（单条 LLM 请求），延迟约 300-800ms。
+- **开销**：语义检测约 300ms（Embedding API）；命中后结构化提取约 1-3s（`quick_chat`）。
 
-### 5.2 会话级学习（Learner）
+### 5.2 增量学习（Learner）
 
-- **触发时机**：`end_session()` 后启动后台线程执行。
+- **触发时机**：**每轮对话结束后实时处理**（`learn_from_turn()`），无需等待 `/bye`。
 - **策略分流**：根据对话内容自动判断类型（casual / technical / corrected / planning / mixed），决定学习重点。
+- **RAG 去重**：提取前先用 `search_knowledge()` 召回已有知识，LLM prompt 中注入"已知道识"，只提取新增内容。
+- **结构化提取**：强制输出 JSON Schema（subject / predicate / object / temporal_state / confidence / category / content）。
+- **质量过滤**：`QualityJudge` 做第二遍 LLM 质检，不通过的知识直接丢弃。
 - **提取内容**：
-  - 用户画像更新（_extract_profile）
-  - 新知识提取（_extract_knowledge）
-  - 经验教训（_extract_lessons：successes / failures / improvements）
-- **去重感知**：提取的知识通过 `MemoryManager.add_knowledge()` 写入，自动语义去重合并。
+  - 用户画像更新（profile）
+  - 新知识提取（knowledge）
+  - 经验教训（lessons：success / failure / improvement）
+  - 知识图谱三元组（triples）
+- **去重感知**：扁平知识通过 `add_knowledge()` 语义去重；图谱三元组通过 `(S,P,O,temporal_state)` 唯一键去重。
 
-### 5.3 周期反思（Reflector）
+### 5.3 知识图谱（KnowledgeGraph）
+
+- **存储**：NetworkX 有向图 + 本地 JSON（`storage/knowledge/graph/triples.json`），零外部依赖。
+- **数据模型**：`Triple(subject, predicate, object, temporal_state, confidence, source, created_at, updated_at, access_count)`。
+- **时态标记**：
+  - `current`：当前有效（默认）
+  - `past`：过去有效，现已改变
+  - `planned`：计划中的未来状态
+  - `negated`：明确否定（与 current 构成矛盾对）
+- **推理能力**：`infer_related(subject, depth=2)` 做传递闭包推理（A喜欢B, B属于C ⇒ A可能喜欢C）。
+- **矛盾检测**：`detect_contradiction()` 查找同一 (S,P,O) 的 current vs negated 对。
+
+### 5.4 自监督反馈闭环
+
+- **触发时机**：`finalize_response()` 中自动检测用户反馈（"谢谢"→positive / "不对"→correction）。
+- **表扬（positive）**：召回本轮相关 knowledge → confidence +0.05 → access_count +2。
+- **纠正（correction）**：
+  - 召回相关 knowledge → confidence -0.2。
+  - 标记 `_status: "corrected"`，写入 `_correction_note`。
+  - 新增 lesson 知识："用户纠正: ..."。
+- **长期效果**：高频认可的知识 → confidence → 1.0 → 优先召回；被纠正的知识 → confidence < 0.3 → 逐渐淘汰。
+
+### 5.5 周期反思（Reflector）
 
 - **触发条件**：`session_count > 0` 且 `session_count % threshold == 0`（默认 threshold=5）。
 - **输入素材**：最近 25 条知识、用户画像、过往反思记录。
@@ -344,8 +380,13 @@ SkillRegistry
 storage/
 ├── conversations/      # 会话归档（session_*.json）
 ├── knowledge/
-│   ├── knowledge_base.json   # 长期知识库
-│   └── vectors.npy           # 向量索引
+│   ├── knowledge_base.json   # 长期知识库（扁平文本）
+│   ├── vectors.npy           # 向量索引
+│   └── graph/
+│       └── triples.json      # 知识图谱三元组
+├── semantic_cache/
+│   ├── intent_anchors.json   # 语义意图示例缓存
+│   └── intent_anchors.npy    # 语义意图锚点向量
 ├── user_profile/
 │   └── user_profile.json     # 用户画像
 ├── reflections/
