@@ -103,6 +103,7 @@
                 <div class="flex justify-between text-xs text-gray-400 pt-1 border-t border-gray-200 dark:border-gray-700">
                     <span>会话 <span id="stat-sessions">0</span></span>
                     <span>知识 <span id="stat-knowledge">0</span></span>
+                    <span>图谱 <span id="stat-graph">0</span></span>
                 </div>
             </div>
         </aside>
@@ -352,6 +353,7 @@
                     <div class="font-medium text-emerald-600 dark:text-emerald-400">📊 成长统计</div>
                     <div>会话数: ${data.total_sessions}</div>
                     <div>知识库: ${data.knowledge_count} 条</div>
+                    <div>知识图谱: ${data.triples_count || 0} 三元组</div>
                     <div>反思次数: ${data.reflection_count}</div>
                     <div>当前温度: ${data.temperature}</div>
                 </div>
@@ -398,6 +400,7 @@
             // 统计
             document.getElementById('stat-sessions').textContent = data.sessions || 0;
             document.getElementById('stat-knowledge').textContent = data.knowledge || 0;
+            document.getElementById('stat-graph').textContent = data.knowledge_graph || 0;
         }
         
         function scrollToBottom() {

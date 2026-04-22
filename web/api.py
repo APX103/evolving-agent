@@ -157,6 +157,10 @@ async def websocket_chat(websocket: WebSocket, client_id: str):
 async def _send_status(client_id: str, agent: EvolvingAgent):
     """发送 Agent 状态到前端"""
     try:
+        kg_count = 0
+        if agent.memory.knowledge_graph:
+            kg_count = len(agent.memory.knowledge_graph.triples)
+
         status = {
             "type": "status",
             "personality": agent.personality.get_all(),
@@ -164,6 +168,7 @@ async def _send_status(client_id: str, agent: EvolvingAgent):
             "emotion": agent.emotion_sensor.session_emotions[-1] if agent.emotion_sensor.session_emotions else None,
             "sessions": agent.memory.session_count,
             "knowledge": len(agent.memory.knowledge_base),
+            "knowledge_graph": kg_count,
         }
         await manager.send_json(client_id, status)
     except Exception:
