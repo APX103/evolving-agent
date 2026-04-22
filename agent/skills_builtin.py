@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 from typing import Dict
+
 from agent.skill import Skill, SkillResult
 
 
@@ -48,14 +49,13 @@ class CalcSkill(Skill):
         if not expr:
             return SkillResult(content="请提供一个数学表达式，比如 `/calc 123 + 456`")
 
-        # 🔧 安全过滤：只允许数字和基本运算符
+        # 安全过滤：只允许数字和基本运算符
         if not re.match(r"^[0-9\+\-\*\/\(\)\^\s\.]+$", expr):
             return SkillResult(content="表达式包含不安全字符，我只支持基本数学运算。", success=False)
 
         try:
-            # 🔧 替换 ^ 为 **，然后用 ast.literal_eval 兼容的方式解析
+            # 替换 ^ 为 **，然后用受限 eval
             safe_expr = expr.replace("^", "**")
-            # 使用受限 eval：空 globals/locals，无 builtins
             result = eval(safe_expr, {"__builtins__": None}, {})
             return SkillResult(
                 content=f"🧮 {expr} = {result}",
@@ -91,7 +91,6 @@ class FileReadSkill(Skill):
         filepath = os.path.expanduser(filepath)
 
         # 安全检查：只允许读取特定目录（工作区、用户目录）
-        # 🔧 修复：统一加尾部斜杠确保路径匹配安全
         resolved = os.path.abspath(filepath)
         allowed_roots = [
             os.path.abspath(os.path.expanduser("~/work")) + os.sep,
@@ -133,7 +132,6 @@ class FileWriteSkill(Skill):
 
     def execute(self, user_input: str, context: Dict) -> SkillResult:
         # 解析：/write ~/file.txt content...
-        # 简单实现：第一行是路径，后面是内容
         rest = user_input.replace("/write", "").strip()
         lines = rest.split("\n", 1)
 
@@ -159,7 +157,7 @@ class FileWriteSkill(Skill):
             )
 
         try:
-            # 🔧 修复：确保目录存在（处理无目录部分的情况）
+            # 修复：确保目录存在
             dir_part = os.path.dirname(filepath)
             if dir_part:
                 os.makedirs(dir_part, exist_ok=True)
@@ -183,13 +181,11 @@ class ShellSkill(Skill):
     triggers = ["/sh", r"r:执行[\s]*(.+)", r"r:运行[\s]*(.+)"]
     priority = 60
 
-    # 允许的安全命令白名单（前缀匹配）
+    # 允许的安全命令白名单（精确匹配第一个 token）
     ALLOWED_CMDS = [
         "ls", "cat", "head", "tail", "grep", "find", "wc",
         "pwd", "echo", "date", "whoami", "uname",
-        "git status", "git log", "git diff", "git branch",
-        "python --version", "python3 --version", "node --version",
-        "npm list", "pip list", "brew list",
+        "git", "python", "python3", "node", "npm", "pip", "brew",
     ]
 
     # 危险命令黑名单
@@ -222,11 +218,12 @@ class ShellSkill(Skill):
                     success=False
                 )
 
-        # 安全检查 2：白名单
-        allowed = any(cmd.strip().startswith(a) for a in self.ALLOWED_CMDS)
+        # 安全检查 2：白名单（精确匹配第一个 token）
+        first_token = cmd.split()[0] if cmd.split() else ""
+        allowed = first_token in self.ALLOWED_CMDS
         if not allowed:
             return SkillResult(
-                content=f"⛔ 安全限制：命令 `{cmd.split()[0]}` 不在白名单中。允许的命令: {', '.join(self.ALLOWED_CMDS)}",
+                content=f"⛔ 安全限制：命令 `{first_token}` 不在白名单中。允许的命令: {', '.join(self.ALLOWED_CMDS)}",
                 success=False
             )
 

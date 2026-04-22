@@ -5,7 +5,10 @@
 import json
 import os
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from typing import Any, Dict, List, Optional
+
+from agent.storage.base import StorageBackend
+from agent.storage.local_json import LocalJsonStorage
 
 
 class RelationshipLog:
@@ -26,51 +29,41 @@ class RelationshipLog:
         "routine": "日常闲聊",
     }
 
-    def __init__(self, storage_path: str = "./storage/relationship"):
-        self.storage_path = storage_path
-        os.makedirs(storage_path, exist_ok=True)
+    def __init__(
+        self,
+        storage_path: str = "./storage/relationship",
+        storage: Optional[StorageBackend] = None,
+    ):
+        self.storage = storage or LocalJsonStorage()
+        self.storage_path = self.storage.ensure_dir(storage_path)
 
-        self.events_file = os.path.join(storage_path, "events.json")
+        self.events_file = os.path.join(self.storage_path, "events.json")
         self.events = self._load_events()
 
         # 关系亲密度 (0-1)，随正面互动增长
         self.intimacy = self._load_intimacy()
         self.trust_level = self._load_trust()
 
-    def _load_events(self) -> List[Dict]:
-        if os.path.exists(self.events_file):
-            with open(self.events_file, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return []
+    def _load_events(self) -> List[Dict[str, Any]]:
+        return self.storage.load_json("events.json", self.storage_path, default=[])
 
     def _save_events(self):
-        with open(self.events_file, "w", encoding="utf-8") as f:
-            json.dump(self.events, f, ensure_ascii=False, indent=2)
+        self.storage.save_json(self.events, "events.json", self.storage_path)
 
     def _load_intimacy(self) -> float:
-        meta_file = os.path.join(self.storage_path, "meta.json")
-        if os.path.exists(meta_file):
-            with open(meta_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data.get("intimacy", 0.1)
-        return 0.1  # 默认起步
+        meta = self.storage.load_json("meta.json", self.storage_path, default={})
+        return meta.get("intimacy", 0.1)
 
     def _load_trust(self) -> float:
-        meta_file = os.path.join(self.storage_path, "meta.json")
-        if os.path.exists(meta_file):
-            with open(meta_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data.get("trust_level", 0.2)
-        return 0.2
+        meta = self.storage.load_json("meta.json", self.storage_path, default={})
+        return meta.get("trust_level", 0.2)
 
     def _save_meta(self):
-        meta_file = os.path.join(self.storage_path, "meta.json")
-        with open(meta_file, "w", encoding="utf-8") as f:
-            json.dump({
-                "intimacy": round(self.intimacy, 3),
-                "trust_level": round(self.trust_level, 3),
-                "updated_at": datetime.now().isoformat()
-            }, f, ensure_ascii=False, indent=2)
+        self.storage.save_json({
+            "intimacy": round(self.intimacy, 3),
+            "trust_level": round(self.trust_level, 3),
+            "updated_at": datetime.now().isoformat()
+        }, "meta.json", self.storage_path)
 
     def add_event(self, event_type: str, description: str, sentiment: float = 0.0):
         """
@@ -100,7 +93,7 @@ class RelationshipLog:
 
         self._save_meta()
 
-    def get_recent_events(self, limit: int = 5, days: int = 7) -> List[Dict]:
+    def get_recent_events(self, limit: int = 5, days: int = 7) -> List[Dict[str, Any]]:
         """获取最近的关系事件"""
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
         recent = [e for e in self.events if e["timestamp"] > cutoff]
@@ -142,14 +135,13 @@ class RelationshipLog:
 
     def get_follow_up_items(self) -> List[str]:
         """提取需要后续跟进的事项"""
-        # 简单启发式：找包含"待确认""下次""之后""到时候"等词的事件
         items = []
         for e in self.events[-20:]:
             desc = e["description"].lower()
             if any(kw in desc for kw in ["待确认", "下次", "之后", "到时候", "改天", "回头"]):
                 items.append(e["description"])
-        return items[-5:]  # 最近 5 个
+        return items[-5:]
 
     def clear_session(self):
         """清空本次会话的情绪历史（ emotion 模块调用）"""
-        pass  # relationship log 没有 per-session 状态
+        pass

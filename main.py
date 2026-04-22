@@ -4,6 +4,7 @@ CLI 入口
 """
 import sys
 import os
+import logging
 
 # 将项目根目录加入路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -11,9 +12,38 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from agent.core import EvolvingAgent
 
 
+def setup_logging():
+    """配置日志：终端彩色输出 + 文件记录"""
+    log_dir = "./storage/logs"
+    os.makedirs(log_dir, exist_ok=True)
+
+    formatter = logging.Formatter(
+        "%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        datefmt="%H:%M:%S"
+    )
+
+    # 文件 handler
+    file_handler = logging.FileHandler(
+        os.path.join(log_dir, "agent.log"),
+        encoding="utf-8"
+    )
+    file_handler.setFormatter(formatter)
+    file_handler.setLevel(logging.DEBUG)
+
+    # 控制台 handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    console_handler.setLevel(logging.INFO)
+
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+    root.addHandler(file_handler)
+    root.addHandler(console_handler)
+
+
 def print_banner():
     print("=" * 50)
-    print("  🦞 Evolving Agent — 越聊越聪明 (v2.5)")
+    print("  🦞 Evolving Agent — 越聊越聪明 (v3.1)")
     print("=" * 50)
     print("  输入你想说的话，和 Agent 对话")
     print("  特殊命令:")
@@ -29,8 +59,9 @@ def print_banner():
 
 
 def main():
+    setup_logging()
     print_banner()
-    
+
     # 检查配置文件
     if not os.path.exists("config.yaml"):
         print("❌ 配置文件不存在！")
@@ -38,7 +69,7 @@ def main():
         print("  cp config.yaml.example config.yaml")
         print("然后填入你的 Kimi API Key。")
         return
-    
+
     # 初始化 Agent
     try:
         agent = EvolvingAgent("config.yaml")
@@ -46,11 +77,11 @@ def main():
         print(f"❌ 初始化失败: {e}")
         print("请检查 config.yaml 中的 API Key 是否正确。")
         return
-    
+
     print(f"✅ {agent.name} 已上线！开始聊天吧~")
     print(f"   人格: {agent.personality.get_all()}")
     print(f"   Skills: {', '.join([s['name'] for s in agent.skills.list_skills()])}\n")
-    
+
     # 对话循环
     while True:
         try:
@@ -58,16 +89,16 @@ def main():
         except (KeyboardInterrupt, EOFError):
             print("\n")
             user_input = "/bye"
-        
+
         if not user_input:
             continue
-        
+
         # 处理命令
         if user_input == "/bye":
             agent.end_session()
             print("再见！下次我会更聪明 👋\n")
             continue
-        
+
         if user_input == "/stats":
             stats = agent.get_stats()
             print(f"\n📊 {stats['name']} 的成长统计")
@@ -77,7 +108,7 @@ def main():
             print(f"   用户画像: {', '.join(stats['profile_keys']) if stats['profile_keys'] else '（暂无）'}")
             print(f"   当前会话: {'进行中' if stats['current_session_active'] else '已结束'}\n")
             continue
-        
+
         if user_input == "/mem":
             context = agent.memory.get_relevant_context()
             if context:
@@ -85,7 +116,7 @@ def main():
             else:
                 print("\n🧠 还没有积累什么记忆，多聊聊吧！\n")
             continue
-        
+
         if user_input == "/clean":
             removed = agent.memory.cleanup_stale_knowledge(days=60, min_access=1)
             if removed:
@@ -93,7 +124,7 @@ def main():
             else:
                 print("\n🧹 没有需要清理的陈旧知识\n")
             continue
-        
+
         if user_input == "/skills":
             skills = agent.skills.list_skills()
             print(f"\n🔧 已注册 Skills ({len(skills)}个):")
@@ -101,21 +132,21 @@ def main():
                 print(f"   {s['name']:12s} | {s['description']} (优先级{s['priority']})")
             print()
             continue
-        
+
         if user_input == "/personality":
             print(f"\n{agent.get_personality_summary()}\n")
             print(f"   当前 temperature: {agent.personality.get_temperature()}")
             print(f"   当前 max_tokens:  {agent.personality.get_max_tokens()}\n")
             continue
-        
+
         if user_input == "/help":
             print_banner()
             continue
-        
+
         # 正常对话
         try:
             response = agent.chat(user_input)
-            
+
             # Skill 直接返回字符串
             if isinstance(response, str):
                 print(f"{agent.name} > {response}\n")
@@ -127,7 +158,7 @@ def main():
                     print(chunk, end="", flush=True)
                     full_text += chunk
                 print("\n")
-                
+
                 # 流式结束后收尾：记录记忆 + 实时学习
                 agent.finalize_response(user_input, full_text)
         except Exception as e:

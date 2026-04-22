@@ -1,26 +1,30 @@
 """
-Kimi API 客户端封装
-使用 OpenAI 兼容接口
+Kimi API 客户端封装（兼容层）
+原实现已迁移至 agent.llm.kimi_client.KimiLLMClient
+此文件保留以兼容旧 import，内部转发到新实现
 """
-import yaml
-from openai import OpenAI
+import warnings
 from typing import List, Dict, Optional
+
+from agent.llm.kimi_client import KimiLLMClient
+
+warnings.warn(
+    "agent.kimi_client 已弃用，请改用 agent.llm.KimiLLMClient",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 
 class KimiClient:
+    """兼容旧接口的包装器"""
+
     def __init__(self, config_path: str = "config.yaml"):
-        with open(config_path, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
-        
-        kimi_cfg = cfg["kimi"]
-        self.client = OpenAI(
-            api_key=kimi_cfg["api_key"],
-            base_url=kimi_cfg["base_url"]
-        )
-        self.model = kimi_cfg.get("model", "kimi-latest")
-        self.max_tokens = kimi_cfg.get("max_tokens", 4096)
-        self.temperature = kimi_cfg.get("temperature", 0.7)
-    
+        self._client = KimiLLMClient()
+        # 透传常用属性
+        self.model = self._client.model
+        self.max_tokens = self._client.max_tokens
+        self.temperature = self._client.temperature
+
     def chat(
         self,
         messages: List[Dict[str, str]],
@@ -28,47 +32,7 @@ class KimiClient:
         max_tokens: Optional[int] = None,
         stream: bool = False
     ):
-        """
-        发送对话请求
-        stream=True 时返回 generator，逐字 yield
-        """
-        try:
-            if stream:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature or self.temperature,
-                    max_tokens=max_tokens or self.max_tokens,
-                    stream=True
-                )
-                return self._stream_generator(response)
-            else:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature or self.temperature,
-                    max_tokens=max_tokens or self.max_tokens,
-                    stream=False
-                )
-                return response.choices[0].message.content or ""
-        
-        except Exception as e:
-            if stream:
-                # 流式出错时 yield 错误信息
-                yield f"[Kimi API 错误] {str(e)}"
-            else:
-                return f"[Kimi API 错误] {str(e)}"
-    
-    def _stream_generator(self, response):
-        """流式响应生成器"""
-        for chunk in response:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
-    
+        return self._client.chat(messages, temperature, max_tokens, stream)
+
     def quick_chat(self, prompt: str, system: str = "") -> str:
-        """快速单次对话，用于内部处理（学习、反思等）"""
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
-        return self.chat(messages, temperature=0.3, max_tokens=2048, stream=False)
+        return self._client.quick_chat(prompt, system)

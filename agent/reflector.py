@@ -1,9 +1,10 @@
 """
-反思进化模块 (v2.1)
+反思进化模块 (v2.2)
 自我批评式反思 + 通过 personality engine 调整状态
 """
 from typing import Dict, List
-from agent.kimi_client import KimiClient
+
+from agent.llm.base import LLMClient
 from agent.memory import MemoryManager
 
 
@@ -33,8 +34,8 @@ _REFLECTION_FORMAT = """以 JSON 输出：
 
 
 class Reflector:
-    def __init__(self, client: KimiClient, memory: MemoryManager):
-        self.client = client
+    def __init__(self, llm_client: LLMClient, memory: MemoryManager):
+        self.llm_client = llm_client
         self.memory = memory
 
     def should_reflect(self, threshold: int = 5) -> bool:
@@ -49,7 +50,7 @@ class Reflector:
 
         prompt = self._build_reflection_prompt(recent_knowledge, profile, reflections)
 
-        response = self.client.quick_chat(
+        response = self.llm_client.quick_chat(
             prompt,
             system=_REFLECTION_SYSTEM
         )
@@ -59,7 +60,7 @@ class Reflector:
         # 保存反思到记忆
         self.memory.add_reflection(reflection)
 
-        # 🔧 修复：不再直接修改 memory profile 的 confidence
+        # 修复：不再直接修改 memory profile 的 confidence
         # confidence 统一由 personality engine 管理
         # 只保存 personality_update 到 profile（这是文本性的自我认知描述）
         if reflection.get("personality_update"):

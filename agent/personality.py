@@ -8,6 +8,9 @@ import os
 from datetime import datetime
 from typing import Dict, Optional
 
+from agent.storage.base import StorageBackend
+from agent.storage.local_json import LocalJsonStorage
+
 
 # ── 人格维度定义 ──
 PERSONALITY_DIMENSIONS = {
@@ -59,17 +62,21 @@ class PersonalityEngine:
     人格引擎：管理 Agent 的动态性格参数
     """
 
-    def __init__(self, storage_path: str = "./storage/personality"):
-        self.storage_path = storage_path
-        os.makedirs(storage_path, exist_ok=True)
+    def __init__(
+        self,
+        storage_path: str = "./storage/personality",
+        storage: Optional[StorageBackend] = None,
+    ):
+        self.storage = storage or LocalJsonStorage()
+        self.storage_path = self.storage.ensure_dir(storage_path)
 
-        self.state_file = os.path.join(storage_path, "state.json")
+        self.state_file = os.path.join(self.storage_path, "state.json")
         self.state = self._load_state()
-        # 🔧 修复：首次初始化后立刻写入磁盘，避免重启丢失
+        # 修复：首次初始化后立刻写入磁盘，避免重启丢失
         if not os.path.exists(self.state_file):
             self._save_state()
 
-    def _load_state(self) -> Dict:
+    def _load_state(self) -> Dict[str, float]:
         if os.path.exists(self.state_file):
             with open(self.state_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -86,8 +93,7 @@ class PersonalityEngine:
 
     def _save_state(self):
         """保存人格状态到磁盘"""
-        with open(self.state_file, "w", encoding="utf-8") as f:
-            json.dump(self.state, f, ensure_ascii=False, indent=2)
+        self.storage.save_json(self.state, "state.json", self.storage_path)
 
     def get(self, dimension: str) -> float:
         return self.state.get(dimension, PERSONALITY_DIMENSIONS.get(dimension, {}).get("default", 0.5))

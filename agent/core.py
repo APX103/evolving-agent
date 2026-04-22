@@ -1,14 +1,15 @@
 """
-Agent 核心逻辑 (v3)
+Agent 核心逻辑 (v3.1)
 协调记忆、人格、情绪、关系、Skill、后台学习和对话
 """
-import yaml
+import logging
 import threading
-import os
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional
 from datetime import datetime
 
-from agent.kimi_client import KimiClient
+from agent.config import Config
+from agent.events import EventBus, default_bus
+from agent.llm.kimi_client import KimiLLMClient
 from agent.memory import MemoryManager
 from agent.learner import Learner
 from agent.reflector import Reflector
@@ -19,88 +20,108 @@ from agent.skills_builtin import build_default_skills
 from agent.emotion import EmotionSensor
 from agent.relationship import RelationshipLog
 from agent.mood import AgentMood
+from agent.storage.local_json import LocalJsonStorage
+
+# 日志初始化
+logger = logging.getLogger("agent.core")
 
 
 class EvolvingAgent:
     def __init__(self, config_path: str = "config.yaml"):
-        with open(config_path, "r", encoding="utf-8") as f:
-            self.config = yaml.safe_load(f)
-        
-        self.agent_cfg = self.config["agent"]
+        self.config = Config(config_path)
+        self.agent_cfg = self.config.agent
         self.name = self.agent_cfg.get("name", "Evo")
-        
+
+        # 统一存储后端
+        self.storage = LocalJsonStorage()
+
+        # LLM 客户端
+        self.llm_client = KimiLLMClient(self.config)
+
         # 初始化各模块
-        self.client = KimiClient(config_path)
-        self.memory = MemoryManager(config_path)
-        self.learner = Learner(self.client, self.memory)
-        self.reflector = Reflector(self.client, self.memory)
-        
-        # 人格引擎 + 信号学习
-        storage_base = self.config["storage"].get("base_path", "./storage")
-        self.personality = PersonalityEngine(
-            storage_path=self.config["storage"].get("personality", os.path.join(storage_base, "personality"))
+        self.memory = MemoryManager(
+            config=self.config,
+            storage=self.storage,
+            llm_client=self.llm_client,
         )
-        self.signal_learner = SignalLearner(self.client, self.memory, self.personality)
-        
-        # 🔥 通人性三大模块
-        self.emotion_sensor = EmotionSensor(self.client)
+        self.learner = Learner(self.llm_client, self.memory)
+        self.reflector = Reflector(self.llm_client, self.memory)
+
+        # 人格引擎 + 信号学习
+        storage_base = self.config.storage.get("base_path", "./storage")
+        self.personality = PersonalityEngine(
+            storage_path=self.config.storage.get("personality", f"{storage_base}/personality"),
+            storage=self.storage,
+        )
+        self.signal_learner = SignalLearner(
+            self.llm_client, self.memory, self.personality,
+            event_bus=default_bus,
+        )
+
+        # 通人性三大模块
+        self.emotion_sensor = EmotionSensor(self.llm_client)
         self.relationship = RelationshipLog(
-            storage_path=self.config["storage"].get("relationship", os.path.join(storage_base, "relationship"))
+            storage_path=self.config.storage.get("relationship", f"{storage_base}/relationship"),
+            storage=self.storage,
         )
         self.mood = AgentMood(
-            storage_path=self.config["storage"].get("mood", os.path.join(storage_base, "mood"))
+            storage_path=self.config.storage.get("mood", f"{storage_base}/mood"),
+            storage=self.storage,
         )
-        
+
         # Skill 插件系统
         self.skills = build_default_skills()
-        
+
         self.session_active = False
         self._learning_thread: Optional[threading.Thread] = None
         self._learning_logs: List[str] = []
         self._log_lock = threading.Lock()
-    
+
+        # 事件总线
+        self.event_bus = default_bus
+
     def _build_system_prompt(self, query_hint: str = "") -> str:
         """构建包含身份、人格、记忆、关系、情绪的动态系统提示"""
         parts = []
-        
+
         # 身份
         parts.append(f"你是 {self.name}，一个不断学习和进化的 AI 助手。")
         parts.append("每次对话后你都会复盘学习，所以你会越来越了解用户、越来越擅长帮助他们。")
-        
-        # 🔥 关系档案
+
+        # 关系档案
         rel_context = self.relationship.get_relationship_context()
         if rel_context:
             parts.append(f"\n{rel_context}")
-        
-        # 🔥 Agent 自身情绪状态（内在状态，不是用户偏好）
+
+        # Agent 自身情绪状态（内在状态，不是用户偏好）
         mood_instruction = self.mood.get_instruction()
         if mood_instruction:
             parts.append(f"\n【你此刻的状态】\n{mood_instruction}")
-        
+
         # 自我认知（反思产物）
         personality_text = self.memory.get_profile("agent_personality")
         if personality_text:
             parts.append(f"\n【你的自我认知】{personality_text}")
-        
+
         # 动态人格行为指令
         behavior = self.personality.get_behavior_instructions()
         if behavior:
             parts.append(f"\n【当前风格指令】\n{behavior}")
-        
+
         # 基于当前问题的语义召回上下文
         context = self.memory.get_relevant_context(query_hint=query_hint, limit=5)
         if context:
             parts.append(f"\n{context}")
-        
+
         # 基础行为指南
         parts.append("\n【行为指南】")
         parts.append("- 自然对话，不需要过度礼貌")
         parts.append("- 记住用户之前说过的话，自然地引用")
         parts.append("- 如果被纠正了，欣然接受并记住")
         parts.append("- 可以适当展示你的个性，不要像个客服")
-        
+
         return "\n".join(parts)
-    
+
     def start_session(self):
         """开始新会话"""
         if self._learning_thread and self._learning_thread.is_alive():
@@ -110,52 +131,59 @@ class EvolvingAgent:
         self.session_active = True
         self.mood.reset_session()
         self.emotion_sensor.session_emotions.clear()
-        
+
         # 检查是否需要反思
-        if self.reflector.should_reflect(self.agent_cfg.get("reflect_threshold", 5)):
-            print("\n🧠 我正在反思之前的对话，准备进化一下...")
+        threshold = self.agent_cfg.get("reflect_threshold", 5)
+        if self.reflector.should_reflect(threshold):
+            logger.info("🧠 正在反思之前的对话，准备进化一下...")
             reflection = self.reflector.reflect()
-            print(f"💡 反思完成：{reflection.get('summary', '')}")
+            logger.info(f"💡 反思完成：{reflection.get('summary', '')}")
             if reflection.get("growth_goals"):
-                print(f"🎯 接下来的目标：{', '.join(reflection['growth_goals'])}")
+                logger.info(f"🎯 接下来的目标：{', '.join(reflection['growth_goals'])}")
             if reflection.get("confidence_change"):
                 try:
                     delta = float(reflection["confidence_change"])
                     self.personality.adjust("confidence", delta)
-                    print(f"   人格自信度调整为: {self.personality.get('confidence'):.2f}")
+                    logger.info(f"   人格自信度调整为: {self.personality.get('confidence'):.2f}")
                 except ValueError:
                     pass
-            print()
-    
+            logger.info("")
+
+        self.event_bus.publish("session.started", {"agent": self.name})
+
     def chat(self, user_input: str):
         """处理用户输入，返回字符串（Skill）或生成器（LLM 流式）"""
         if not self.session_active:
             self.start_session()
-        
+
         # 先打印后台学习积累日志
         self._flush_learning_logs()
-        
+
+        self.event_bus.publish("turn.started", {"user_input": user_input})
+
         # ── 实时人格调整（信号词） ──
         signal_changes = self.personality.apply_signals(user_input)
         if signal_changes:
             changed_dims = ", ".join([f"{k}→{v:+.2f}" for k, v in signal_changes.items()])
-            print(f"  [人格微调: {changed_dims}]")
-        
-        # 🔥 情绪感知
+            logger.info(f"  [人格微调: {changed_dims}]")
+
+        # 情绪感知
         emotion_result = self.emotion_sensor.analyze(user_input)
         emotion_label = emotion_result.get("label", "平静")
         emotion_intensity = emotion_result.get("intensity", 0.5)
-        
+
         if emotion_label != "平静" or emotion_intensity > 0.6:
-            print(f"  [情绪感知: {emotion_label} {emotion_intensity:.1f}]")
+            logger.info(f"  [情绪感知: {emotion_label} {emotion_intensity:.1f}]")
             if emotion_result.get("needs"):
-                print(f"    用户需要: {', '.join(emotion_result['needs'][:3])}")
-        
+                logger.info(f"    用户需要: {', '.join(emotion_result['needs'][:3])}")
+
+        self.event_bus.publish("emotion.detected", emotion_result)
+
         # 情绪驱动的 personality 微调
         emotion_style_adj = self.emotion_sensor.get_style_adjustments(emotion_result)
         for dim, delta in emotion_style_adj.items():
             self.personality.adjust(dim, delta)
-        
+
         # 更新 Agent 自身 mood
         self.mood.turn_count_in_session = len(self.memory.short_term) // 2
         feedback_type = self._detect_quick_feedback(user_input)
@@ -165,10 +193,10 @@ class EvolvingAgent:
             turn_count=self.mood.turn_count_in_session,
             feedback_type=feedback_type
         )
-        
+
         # 记录用户输入到短期记忆
         self.memory.add_turn("user", user_input)
-        
+
         # ── Skill 路由 ──
         ctx = {
             "memory": self.memory,
@@ -176,9 +204,10 @@ class EvolvingAgent:
             "short_term": self.memory.short_term,
         }
         matched_skill = self.skills.find_handler(user_input, ctx)
-        
+
         if matched_skill:
-            print(f"  [调用 Skill: {matched_skill.name}]")
+            logger.info(f"  [调用 Skill: {matched_skill.name}]")
+            self.event_bus.publish("skill.executed", {"skill": matched_skill.name, "input": user_input})
             try:
                 result = matched_skill.execute(user_input, ctx)
                 response = result.content
@@ -190,41 +219,41 @@ class EvolvingAgent:
                     )
             except Exception as e:
                 response = f"[Skill {matched_skill.name} 执行出错] {e}"
-            
+
             self.memory.add_turn("assistant", response)
             try:
                 self.signal_learner.on_turn_complete(user_input, response)
             except Exception:
                 pass
-            
+
             return response
-        
+
         # ── 无 Skill 匹配，走 LLM ──
         system_prompt = self._build_system_prompt(user_input)
-        
+
         # 情绪适配指令追加
         emotion_instruction = self.emotion_sensor.get_response_instruction(emotion_result)
         if emotion_instruction:
             system_prompt += f"\n\n【此刻情绪适配】\n{emotion_instruction}"
-        
+
         messages = self.memory.get_context_messages(
             system_prompt,
             max_turns=self.agent_cfg.get("max_short_term_turns", 10)
         )
-        
+
         # 根据人格 + mood 动态调整 LLM 参数
         temperature = self.personality.get_temperature()
         temperature += self.mood.get_temperature_adjustment()
         temperature = max(0.1, min(1.0, temperature))
         max_tokens = self.personality.get_max_tokens()
-        
-        return self.client.chat(
+
+        return self.llm_client.chat(
             messages,
             temperature=temperature,
             max_tokens=max_tokens,
             stream=True
         )
-    
+
     def _detect_quick_feedback(self, text: str) -> str:
         """快速判断用户反馈类型，供 mood 使用"""
         lowered = text.lower()
@@ -235,13 +264,13 @@ class EvolvingAgent:
         if any(s in lowered for s in ["烦", "气", "无语", "失望", "没用", "不行"]):
             return "negative"
         return "neutral"
-    
+
     def _flush_learning_logs(self):
         """将后台线程积累的学习日志一次性打印"""
         with self._log_lock:
             if self._learning_logs:
                 for msg in self._learning_logs:
-                    print(f"\n  {msg}")
+                    logger.info(f"\n  {msg}")
                 self._learning_logs.clear()
 
     def _background_learn(self, messages: List[Dict]):
@@ -270,26 +299,26 @@ class EvolvingAgent:
             return None
 
         messages = self.memory.short_term.copy()
-        
-        # 🔥 记录关系事件
+
+        # 记录关系事件
         if messages:
             self._record_relationship_event(messages)
             # 情绪趋势
             trend = self.emotion_sensor.get_session_emotion_trend()
             if trend:
-                print(f"  [情绪趋势: {trend}]")
-        
+                logger.info(f"  [情绪趋势: {trend}]")
+
         self.memory.end_session()
         self.session_active = False
 
-        print(f"\n💾 会话已保存。累计进行了 {self.memory.session_count} 次对话。")
+        logger.info(f"\n💾 会话已保存。累计进行了 {self.memory.session_count} 次会话。")
 
         if self._learning_thread and self._learning_thread.is_alive():
-            print("⏳ 等上一轮复盘结束...")
+            logger.info("⏳ 等上一轮复盘结束...")
             self._learning_thread.join(timeout=30)
 
         if self.agent_cfg.get("learn_after_session", True) and messages:
-            print("📚 复盘学习在后台进行，你可以继续聊...")
+            logger.info("📚 复盘学习在后台进行，你可以继续聊...")
             self._learning_thread = threading.Thread(
                 target=self._background_learn,
                 args=(messages,),
@@ -297,21 +326,22 @@ class EvolvingAgent:
             )
             self._learning_thread.start()
         else:
-            print()
+            logger.info("")
 
+        self.event_bus.publish("session.ended", {"session_count": self.memory.session_count})
         return {}
-    
+
     def _record_relationship_event(self, messages: List[Dict]):
         """从会话中提取关系事件"""
         # 简单启发式：根据对话特征判断事件类型
         user_msgs = [m["content"] for m in messages if m["role"] == "user"]
         all_text = " ".join(user_msgs).lower()
-        
+
         # 判断事件类型
         event_type = "routine"
         sentiment = 0.0
         desc = "日常对话"
-        
+
         if self.memory.session_count == 1:
             event_type = "first_meet"
             sentiment = 0.3
@@ -336,9 +366,9 @@ class EvolvingAgent:
             event_type = "deep_talk"
             sentiment = 0.3
             desc = f"进行了较深入的交流（{len(user_msgs)}轮对话）"
-        
+
         self.relationship.add_event(event_type, desc, sentiment)
-    
+
     def finalize_response(self, user_input: str, response: str):
         """流式输出结束后，记录回复并触发实时学习"""
         self.memory.add_turn("assistant", response)
@@ -347,7 +377,7 @@ class EvolvingAgent:
             if logs:
                 for log in logs:
                     if log["signal"] not in ("feedback", "auto_verbosity_down", "auto_verbosity_up"):
-                        print(f"\n  [实时学习: {log['signal']} → {log['result']}]")
+                        logger.info(f"\n  [实时学习: {log['signal']} → {log['result']}]")
         except Exception:
             pass
 
@@ -364,7 +394,7 @@ class EvolvingAgent:
             "temperature": self.personality.get_temperature(),
             "max_tokens": self.personality.get_max_tokens(),
         }
-    
+
     def get_personality_summary(self) -> str:
         """获取人格状态摘要"""
         return self.personality.summary()

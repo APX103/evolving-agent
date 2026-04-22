@@ -6,7 +6,10 @@ import json
 import os
 import random
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
+
+from agent.storage.base import StorageBackend
+from agent.storage.local_json import LocalJsonStorage
 
 
 class AgentMood:
@@ -24,11 +27,15 @@ class AgentMood:
         "detached": {"energy": 0.4, "inspiration": 0.3, "caution": 0.4, "warmth": 0.2},
     }
 
-    def __init__(self, storage_path: str = "./storage/mood"):
-        self.storage_path = storage_path
-        os.makedirs(storage_path, exist_ok=True)
+    def __init__(
+        self,
+        storage_path: str = "./storage/mood",
+        storage: Optional[StorageBackend] = None,
+    ):
+        self.storage = storage or LocalJsonStorage()
+        self.storage_path = self.storage.ensure_dir(storage_path)
 
-        self.state_file = os.path.join(storage_path, "state.json")
+        self.state_file = os.path.join(self.storage_path, "state.json")
         self.state = self._load_state()
 
         # 会话内状态
@@ -36,7 +43,7 @@ class AgentMood:
         self.positive_feedback_count = 0
         self.negative_feedback_count = 0
 
-    def _load_state(self) -> Dict:
+    def _load_state(self) -> Dict[str, Any]:
         if os.path.exists(self.state_file):
             with open(self.state_file, "r", encoding="utf-8") as f:
                 return json.load(f)
@@ -51,8 +58,7 @@ class AgentMood:
         }
 
     def _save_state(self):
-        with open(self.state_file, "w", encoding="utf-8") as f:
-            json.dump(self.state, f, ensure_ascii=False, indent=2)
+        self.storage.save_json(self.state, "state.json", self.storage_path)
 
     def _clamp(self, val: float) -> float:
         return max(0.1, min(1.0, round(val, 3)))
@@ -62,7 +68,7 @@ class AgentMood:
         user_emotion_label: str = "",
         user_emotion_intensity: float = 0.5,
         turn_count: int = 0,
-        feedback_type: str = "",  # positive | negative | correction | neutral
+        feedback_type: str = "",
     ):
         """
         根据用户互动更新 Agent 自身状态
@@ -79,7 +85,7 @@ class AgentMood:
             self.state["inspiration"] = self._clamp(self.state["inspiration"] + 0.02)
         elif user_emotion_label in ("疲惫", "沮丧"):
             self.state["energy"] = self._clamp(self.state["energy"] - 0.02)
-            self.state["warmth"] = self._clamp(self.state["warmth"] + 0.02)  # 更温柔
+            self.state["warmth"] = self._clamp(self.state["warmth"] + 0.02)
         elif user_emotion_label == "愤怒":
             self.state["caution"] = self._clamp(self.state["caution"] + 0.05)
             self.state["energy"] = self._clamp(self.state["energy"] - 0.02)
@@ -109,20 +115,19 @@ class AgentMood:
         """根据当前状态判断情绪标签"""
         s = self.state
         if s["inspiration"] > 0.75 and s["energy"] > 0.6:
-            return "inspired"  # 灵感迸发
+            return "inspired"
         if s["warmth"] > 0.8:
-            return "warm"  # 很温暖
+            return "warm"
         if s["energy"] < 0.35:
-            return "tired"  # 累了
+            return "tired"
         if s["caution"] > 0.7:
-            return "cautious"  # 谨慎
+            return "cautious"
         if s["warmth"] < 0.3 and s["energy"] < 0.5:
-            return "detached"  # 有点疏离
-        return "energetic"  # 默认有活力
+            return "detached"
+        return "energetic"
 
     def get_instruction(self) -> str:
         """生成 Agent 自身状态对 LLM 的影响指令"""
-        label = self.get_mood_label()
         s = self.state
 
         instructions = []
@@ -167,11 +172,11 @@ class AgentMood:
         s = self.state
         adj = 0.0
         if s["inspiration"] > 0.7:
-            adj += 0.1  # 灵感高时更发散
+            adj += 0.1
         if s["caution"] > 0.7:
-            adj -= 0.15  # 谨慎时更保守
+            adj -= 0.15
         if s["energy"] < 0.3:
-            adj -= 0.1  # 累的时候别乱发挥
+            adj -= 0.1
         return adj
 
     def reset_session(self):

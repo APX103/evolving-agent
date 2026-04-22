@@ -3,17 +3,15 @@
 对话中检测到特定信号词时，立即触发迷你学习
 不用等 /bye 会话结束
 """
-import json
 import re
-from typing import Dict, List, Optional, Tuple
-from datetime import datetime
+from typing import Dict, List, Optional
 
-from agent.kimi_client import KimiClient
+from agent.events import EventBus, default_bus
+from agent.llm.base import LLMClient
 from agent.memory import MemoryManager
 
 
 # ── 信号模式定义 ──
-# 🔧 修复：正则精度提升，避免误匹配
 SIGNAL_PATTERNS = {
     "remember": {
         "patterns": [
@@ -58,7 +56,7 @@ SIGNAL_PATTERNS = {
             r"我的名字是(.+)",
             r"我是做(.+)的",
             r"我的工作[是]?(.+)",
-            # 🔧 排除"我是说/想/觉得"等常见前缀
+            # 排除"我是说/想/觉得"等常见前缀
             r"我是(?!说|想|觉得|认为|指|在|要|会|可以|可能|已经|就是)(.+)",
         ],
         "action": "update_profile",
@@ -118,10 +116,17 @@ class SignalLearner:
     实时信号学习者：对话中即时检测信号，触发快速学习
     """
 
-    def __init__(self, client: KimiClient, memory: MemoryManager, personality):
-        self.client = client
+    def __init__(
+        self,
+        llm_client: LLMClient,
+        memory: MemoryManager,
+        personality,
+        event_bus: Optional[EventBus] = None,
+    ):
+        self.llm_client = llm_client
         self.memory = memory
         self.personality = personality
+        self.event_bus = event_bus or default_bus
 
     def scan_and_learn(self, user_input: str, assistant_response: str = "") -> List[Dict]:
         """
@@ -141,12 +146,14 @@ class SignalLearner:
             # 执行对应动作
             result = self._execute_action(signal_type, config, extracted, user_input)
             if result:
-                logs.append({
+                log = {
                     "signal": signal_type,
                     "extracted": extracted,
                     "action": config["action"],
                     "result": result
-                })
+                }
+                logs.append(log)
+                self.event_bus.publish("signal.learned", log)
 
         # 检测情感反馈（不用 regex，用关键词）
         feedback = self._detect_feedback(user_input)
@@ -169,7 +176,7 @@ class SignalLearner:
         if action == "add_knowledge":
             # 使用 LLM 精炼提取内容
             prompt = config["prompt_template"].format(extracted)
-            refined = self.client.quick_chat(prompt, system="你只输出精炼后的事实，不要解释，不要多余文字。")
+            refined = self.llm_client.quick_chat(prompt, system="你只输出精炼后的事实，不要解释，不要多余文字。")
             refined = refined.strip().strip("\"'")
 
             if len(refined) > 5:
@@ -184,7 +191,7 @@ class SignalLearner:
             # 尝试确定 key
             key = self._determine_profile_key(config, full_input)
             if key:
-                refined = self.client.quick_chat(
+                refined = self.llm_client.quick_chat(
                     f"提取用户的身份信息，只输出简短值: {extracted}",
                     system="只输出简短的事实值，不要解释。"
                 ).strip().strip("\"'")

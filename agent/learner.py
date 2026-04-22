@@ -1,10 +1,11 @@
 """
-主动学习引擎 (v2)
+主动学习引擎 (v2.1)
 Few-shot 示例 + 分层学习策略 + 去重感知
 """
 import json
-from typing import List, Dict
-from agent.kimi_client import KimiClient
+from typing import Dict, List
+
+from agent.llm.base import LLMClient
 from agent.memory import MemoryManager
 
 
@@ -51,27 +52,27 @@ _STRATEGY_MAP = {
 
 
 class Learner:
-    def __init__(self, client: KimiClient, memory: MemoryManager):
-        self.client = client
+    def __init__(self, llm_client: LLMClient, memory: MemoryManager):
+        self.llm_client = llm_client
         self.memory = memory
-    
+
     def learn_from_session(self, messages: List[Dict]) -> Dict:
         if len(messages) < 2:
             return {"learned": False, "reason": "对话太短"}
-        
+
         conversation_text = self._format_conversation(messages)
-        
+
         # 1. 判断对话类型，选择学习策略
         strategy = self._detect_strategy(conversation_text)
-        
+
         # 2. 并行提取（串行调用，但逻辑分层）
         profile_updates = self._extract_profile(conversation_text)
         new_knowledge = self._extract_knowledge(conversation_text, strategy)
         lessons = self._extract_lessons(conversation_text)
-        
+
         # 3. 应用 + 去重感知
         applied = self._apply_to_memory(profile_updates, new_knowledge, lessons)
-        
+
         # 4. 返回摘要
         return {
             "learned": True,
@@ -82,26 +83,26 @@ class Learner:
             "merged_count": applied.get("merged", 0),
             "details": applied
         }
-    
+
     def _detect_strategy(self, conversation: str) -> str:
         """
         快速判断对话类型，决定学习重点
         """
         lowered = conversation.lower()
-        
+
         # 纠正信号
         correction_signals = ["不对", "错了", "不是这样的", "纠正", "应该是", "其实", "你误解", "不是这个意思"]
         if any(s in lowered for s in correction_signals):
             return "corrected"
-        
+
         # 技术信号
         tech_signals = ["代码", "报错", "bug", "api", "框架", "库", "import", "docker", "部署", "服务器", "数据库"]
         tech_count = sum(1 for s in tech_signals if s in lowered)
-        
+
         # 规划信号
         planning_signals = ["想做一个", "计划", "方案", "设计", "架构", "怎么实现", "第一步"]
         planning_count = sum(1 for s in planning_signals if s in lowered)
-        
+
         if tech_count >= 3 and planning_count >= 2:
             return "mixed"
         elif tech_count >= 3:
@@ -110,7 +111,7 @@ class Learner:
             return "planning"
         else:
             return "casual"
-    
+
     def _format_conversation(self, messages: List[Dict]) -> str:
         lines = []
         for msg in messages:
@@ -118,7 +119,7 @@ class Learner:
             content = msg["content"].replace("\n", " ")
             lines.append(f"{role}: {content}")
         return "\n".join(lines)
-    
+
     def _extract_profile(self, conversation: str) -> List[Dict]:
         prompt = f"""分析以下对话，提取关于用户的明确信息。
 
@@ -129,11 +130,11 @@ class Learner:
 
 只返回 JSON 数组，不要其他文字。如果没有明确信息，返回 []。
 """
-        return self._parse_json_list(self.client.quick_chat(prompt))
-    
+        return self._parse_json_list(self.llm_client.quick_chat(prompt))
+
     def _extract_knowledge(self, conversation: str, strategy: str) -> List[Dict]:
         strategy_hint = _STRATEGY_MAP.get(strategy, _STRATEGY_MAP["mixed"])
-        
+
         prompt = f"""分析以下对话，提取新的知识和信息。
 
 策略指引：{strategy_hint}
@@ -145,8 +146,8 @@ class Learner:
 
 只返回 JSON 数组，不要其他文字。如果没有新知识，返回 []。
 """
-        return self._parse_json_list(self.client.quick_chat(prompt))
-    
+        return self._parse_json_list(self.llm_client.quick_chat(prompt))
+
     def _extract_lessons(self, conversation: str) -> Dict:
         prompt = f"""分析以下对话，评估助手的表现，提取经验教训。
 
@@ -157,17 +158,17 @@ class Learner:
 
 只返回 JSON，不要其他文字。如果没有明显经验教训，返回空字段。
 """
-        return self._parse_json_dict(self.client.quick_chat(prompt))
-    
+        return self._parse_json_dict(self.llm_client.quick_chat(prompt))
+
     def _apply_to_memory(self, profile_updates: List[Dict], knowledge: List[Dict], lessons: Dict) -> Dict:
         applied = {"profile": [], "knowledge": [], "lessons": [], "merged": 0}
-        
+
         # 应用画像
         for item in profile_updates:
             if "key" in item and "value" in item:
                 self.memory.update_profile(item["key"], item["value"])
                 applied["profile"].append(item)
-        
+
         # 应用新知识（去重合并内置）
         for item in knowledge:
             if "category" in item and "content" in item:
@@ -180,7 +181,7 @@ class Learner:
                     applied["merged"] += 1
                 else:
                     applied["knowledge"].append(item)
-        
+
         # 应用经验教训
         for category in ["successes", "failures", "improvements"]:
             for lesson in lessons.get(category, []):
@@ -190,9 +191,9 @@ class Learner:
                     source="session_reflection"
                 )
                 applied["lessons"].append(lesson)
-        
+
         return applied
-    
+
     # ── JSON 解析工具 ──
     def _clean_json(self, text: str) -> str:
         text = text.strip()
@@ -203,14 +204,14 @@ class Learner:
         if text.endswith("```"):
             text = text[:-3]
         return text.strip()
-    
+
     def _parse_json_list(self, text: str) -> List[Dict]:
         try:
             data = json.loads(self._clean_json(text))
             return data if isinstance(data, list) else []
         except Exception:
             return []
-    
+
     def _parse_json_dict(self, text: str) -> Dict:
         try:
             data = json.loads(self._clean_json(text))

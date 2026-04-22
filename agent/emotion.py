@@ -4,10 +4,10 @@
 不只是关键词匹配，而是用 LLM 做深度情绪分析
 """
 import json
-from typing import Dict, List, Optional
+from typing import Dict, List
 from datetime import datetime
 
-from agent.kimi_client import KimiClient
+from agent.llm.base import LLMClient
 
 
 # ── 情绪标签与回应策略映射 ──
@@ -56,8 +56,8 @@ class EmotionSensor:
     情绪传感器：分析用户输入的情绪，提供回应策略
     """
 
-    def __init__(self, client: KimiClient):
-        self.client = client
+    def __init__(self, llm_client: LLMClient):
+        self.llm_client = llm_client
         # 短期情绪历史（当前会话）
         self.session_emotions: List[Dict] = []
 
@@ -88,7 +88,7 @@ class EmotionSensor:
 只返回 JSON，不要其他文字。"""
 
         try:
-            response = self.client.quick_chat(
+            response = self.llm_client.quick_chat(
                 prompt,
                 system="你是一位敏锐的情绪分析师，擅长从文字中读出言外之意。"
             )
@@ -161,7 +161,6 @@ class EmotionSensor:
         return f"用户整体情绪以「{most_common}」为主"
 
     def _parse_json(self, text: str) -> Dict:
-        import json
         try:
             cleaned = text.strip()
             if cleaned.startswith("```json"):
