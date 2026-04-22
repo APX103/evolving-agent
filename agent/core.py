@@ -27,6 +27,7 @@ from agent.mcp_tool_skill import MCPRouterSkill, MCPToolSkill
 from agent.planner import Planner
 from agent.executor import Executor
 from agent.plan import Plan, StepStatus
+from agent.checkpoint import CheckpointManager
 
 logger = logging.getLogger("agent.core")
 
@@ -80,6 +81,11 @@ class EvolvingAgent:
             llm_client=self.llm_client,
             mcp_client=self.mcp_client,
             skills=self.skills,
+        )
+
+        # ── Checkpoint 集成 ──
+        self.checkpoint_mgr = CheckpointManager(
+            base_path=os.path.join(storage_base, "checkpoints")
         )
 
         self.session_active = False
@@ -363,6 +369,19 @@ class EvolvingAgent:
 
         self.memory.end_session()
         self.session_active = False
+
+        # ── 保存 Checkpoint ──
+        try:
+            cp_id = self.checkpoint_mgr.save({
+                "session_count": self.memory.session_count,
+                "personality": self.personality.get_all(),
+                "mood": self.mood.state,
+                "relationship": self.relationship.get_summary(),
+                "knowledge_count": len(self.memory.knowledge_base),
+            })
+            logger.info(f"  [Checkpoint 已保存: {cp_id}]")
+        except Exception as e:
+            logger.warning(f"[Checkpoint] 保存失败: {e}")
 
         logger.info(f"\n💾 会话已保存。累计进行了 {self.memory.session_count} 次会话。")
 

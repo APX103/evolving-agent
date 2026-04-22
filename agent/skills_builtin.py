@@ -10,6 +10,7 @@ import logging
 from simpleeval import simple_eval
 from agent.skill import Skill, SkillResult
 from agent.sandbox import PythonSandbox
+from agent.approval import ApprovalManager
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +230,18 @@ class ShellSkill(Skill):
         if not allowed:
             return SkillResult(
                 content=f"⛔ 安全限制：命令 `{first_token}` 不在白名单中。允许的命令: {', '.join(self.ALLOWED_CMDS)}",
+                success=False
+            )
+
+        # 人工审批
+        approval_result = self.approval.request_approval(
+            action_type="shell",
+            description=f"执行 Shell 命令: {cmd}",
+            details={"command": cmd, "cwd": os.getcwd()}
+        )
+        if not approval_result.approved:
+            return SkillResult(
+                content=f"⛔ 操作已取消: {approval_result.reason or '用户拒绝'}",
                 success=False
             )
 
