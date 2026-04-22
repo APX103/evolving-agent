@@ -90,15 +90,15 @@ class KnowledgeGraph:
         添加三元组，自动去重和更新
         返回: True=新增/更新, False=重复跳过
         """
-        # 查找是否已存在相同 (subject, predicate, object)
+        # 查找是否已存在相同 (subject, predicate, object, temporal_state)
         for existing in self.triples:
             if (existing.subject == triple.subject and
                 existing.predicate == triple.predicate and
-                existing.object == triple.object):
-                # 更新：取更高 confidence，更新 temporal_state
+                existing.object == triple.object and
+                existing.temporal_state == triple.temporal_state):
+                # 更新：取更高 confidence
                 if triple.confidence > existing.confidence:
                     existing.confidence = triple.confidence
-                    existing.temporal_state = triple.temporal_state
                     existing.updated_at = triple.updated_at
                     existing.source = triple.source
                     self._save_triples()
