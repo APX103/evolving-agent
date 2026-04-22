@@ -4,3 +4,5 @@
 storage
 
 config.yaml
+
+**/__pycache__
