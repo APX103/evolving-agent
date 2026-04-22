@@ -4,14 +4,19 @@
 
 ## 特点
 
-- **分层记忆**：短期上下文 + 工作记忆 + 长期知识库（向量语义检索）
-- **主动学习**：每次对话后自动提炼知识点，支持实时信号词触发
+- **分层记忆**：短期上下文 + 工作记忆 + 长期知识库（向量语义检索 + 知识图谱）
+- **语义信号检测**：用 Embedding 向量匹配替代正则，捕捉 "我比较偏爱火锅" 等语言变体
+- **增量学习**：每轮对话实时提取新知识，RAG 召回已知道识避免重复，无需等待 `/bye`
+- **结构化提取**：强制 LLM 输出 JSON Schema（subject/predicate/object/confidence/temporal_state）
+- **LLM-as-Judge 质检**：第二遍 LLM 过滤幻觉、主客体混淆、时态错误
+- **知识图谱**：(S,P,O) 三元组存储，支持时态标记、矛盾检测、传递推理
+- **自监督反馈闭环**：用户表扬提升 knowledge confidence，纠正自动标记并记录修正
 - **知识去重**：语义相似的知识自动合并，避免膨胀
 - **记忆老化**：长期未访问的低频知识自动清理
 - **人格状态机**：9维动态性格参数，根据用户反馈实时微调
 - **Skill 插件系统**：可扩展的能力模块（计算、文件读写、Shell 等）
 - **流式输出**：打字机效果回复，实时显示思考过程
-- **纯本地存储**：所有记忆存在本地 JSON/向量，隐私可控
+- **纯本地存储**：所有记忆存在本地 JSON/向量/图谱，隐私可控
 
 ## 快速开始
 
@@ -40,18 +45,21 @@ evolving-agent/
 ├── agent/
 │   ├── core.py          # 主 Agent：协调记忆、人格、Skill、对话
 │   ├── kimi_client.py   # Kimi API 封装（支持流式输出）
-│   ├── memory.py        # 分层记忆系统（向量索引 + 语义检索 + 去重合并）
-│   ├── embedding.py     # Embedding 客户端（Kimi API / 本地 fallback）
-│   ├── learner.py       # 主动学习引擎（Few-shot + 分层策略）
-│   ├── reflector.py     # 反思进化模块（自我批评式 + 数值化人格调整）
-│   ├── personality.py   # 人格状态机（9维动态参数 + 信号词实时调整）
-│   ├── signal_learner.py # 实时信号学习（"请记住"/"我喜欢"立即触发）
-│   ├── skill.py         # Skill 插件基类与注册中心
-│   ├── skills_builtin.py # 内置 Skills（计算、文件、Shell 等）
+│   ├── memory.py           # 分层记忆系统（向量索引 + 语义检索 + 去重合并 + 知识图谱）
+│   ├── embedding.py        # Embedding 客户端（Kimi API / 本地 fallback）
+│   ├── learner.py          # 增量学习引擎（RAG 去重 + 结构化提取 + 质量过滤）
+│   ├── signal_learner.py   # 实时信号学习（语义检测 + 结构化提取）
+│   ├── semantic_detector.py # 语义信号检测器（Embedding 意图匹配）
+│   ├── quality_judge.py    # LLM-as-Judge 质量过滤
+│   ├── knowledge_graph.py  # 知识图谱（S,P,O 三元组 + 推理 + 矛盾检测）
+│   ├── reflector.py        # 反思进化模块（自我批评式 + 数值化人格调整）
+│   ├── personality.py      # 人格状态机（9维动态参数 + 信号词实时调整）
+│   ├── skill.py            # Skill 插件基类与注册中心
+│   ├── skills_builtin.py   # 内置 Skills（计算、文件、Shell 等）
 │   └── utils.py
 ├── storage/             # 本地记忆存储（自动生成）
 │   ├── conversations/   # 对话历史
-│   ├── knowledge/       # 知识库 + 向量索引
+│   ├── knowledge/       # 知识库 + 向量索引 + 图谱三元组
 │   ├── user_profile/    # 用户画像
 │   ├── reflections/     # 反思日志
 │   └── personality/     # 人格状态
@@ -80,7 +88,7 @@ evolving-agent/
 |---|---|---|
 | 短期记忆 | 当前对话上下文 | 当前会话 |
 | 工作记忆 | 本次会话关键点 | 会话结束提炼 |
-| 长期记忆 | 跨会话知识 + 向量索引 | 永久（自动老化） |
+| 长期记忆 | 跨会话知识 + 向量索引 + 知识图谱 | 永久（自动老化） |
 
 ### 人格状态机（9维）
 
