@@ -104,6 +104,8 @@ def main():
             print(f"\n📊 {stats['name']} 的成长统计")
             print(f"   累计会话: {stats['total_sessions']}")
             print(f"   知识库: {stats['knowledge_count']} 条")
+            if 'triples_count' in stats:
+                print(f"   知识图谱: {stats['triples_count']} 三元组")
             print(f"   反思次数: {stats['reflection_count']}")
             print(f"   用户画像: {', '.join(stats['profile_keys']) if stats['profile_keys'] else '（暂无）'}")
             print(f"   当前会话: {'进行中' if stats['current_session_active'] else '已结束'}\n")
