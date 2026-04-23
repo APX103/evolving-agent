@@ -91,6 +91,10 @@ class EvolvingAgent:
             procedural_memory=self.procedural_memory,
         )
 
+        # ── MCP 集成（必须在 WorldState 和 Executor 之前初始化）──
+        self.mcp_client: Optional[MCPClient] = None
+        self._init_mcp()
+
         # 世界状态（环境认知）
         self.world_state = WorldState(
             mcp_client=self.mcp_client,
@@ -102,10 +106,6 @@ class EvolvingAgent:
         self.approval_mgr = ApprovalManager(config=approval_cfg, mode=approval_cfg.get("mode", "blocking"))
 
         self.skills = build_default_skills(approval=self.approval_mgr)
-
-        # ── MCP 集成 ──
-        self.mcp_client: Optional[MCPClient] = None
-        self._init_mcp()
 
         # ── PlanningFlow 集成 ──
         self.planner = Planner(self.llm_client)
