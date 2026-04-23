@@ -25,10 +25,11 @@ class ShortTermStore(MemoryStore):
     def _new_session_id(self) -> str:
         return datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    def add_turn(self, role: str, content: str):
+    def add_turn(self, role: str, content: str, image: Optional[str] = None):
         turn = {
             "role": role,
             "content": content,
+            "image": image,
             "timestamp": datetime.now().isoformat()
         }
         self.short_term.append(turn)

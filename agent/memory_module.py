@@ -116,18 +116,37 @@ class MemoryManager:
 
     # ── 短期记忆 ──
 
-    def add_turn(self, role: str, content: str):
-        self._short_term.add_turn(role, content)
+    def add_turn(self, role: str, content: str, image: Optional[str] = None):
+        self._short_term.add_turn(role, content, image=image)
 
     def get_short_term(self, max_turns: int = 10) -> List[Dict[str, Any]]:
         return self._short_term.get_short_term(max_turns)
 
-    def get_context_messages(self, system_prompt: str, max_turns: int = 10, compress: bool = True) -> List[Dict[str, str]]:
+    def get_context_messages(self, system_prompt: str, max_turns: int = 10, compress: bool = True) -> List[Dict[str, Any]]:
         if compress and self.context_compressor:
-            return self.context_compressor.get_full_compressed_context(system_prompt, self.short_term)
-        messages = [{"role": "system", "content": system_prompt}]
-        messages.extend(self.get_short_term(max_turns))
-        return messages
+            raw_messages = self.context_compressor.get_full_compressed_context(system_prompt, self.short_term)
+        else:
+            messages = [{"role": "system", "content": system_prompt}]
+            messages.extend(self.get_short_term(max_turns))
+            raw_messages = messages
+        # 构建标准消息格式，支持图片 vision 格式
+        cleaned = []
+        for m in raw_messages:
+            role = m.get("role", "user")
+            content = m.get("content", "")
+            image = m.get("image")
+            if image and role == "user":
+                msg: Dict[str, Any] = {
+                    "role": role,
+                    "content": [
+                        {"type": "text", "text": content},
+                        {"type": "image_url", "image_url": {"url": image}}
+                    ]
+                }
+            else:
+                msg = {"role": role, "content": content}
+            cleaned.append(msg)
+        return cleaned
 
     # ── 工作记忆 ──
 

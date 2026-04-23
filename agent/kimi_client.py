@@ -4,7 +4,7 @@ Kimi API 客户端封装（兼容层）
 此文件保留以兼容旧 import，内部转发到新实现
 """
 import warnings
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 
 from agent.llm.kimi_client import KimiLLMClient
 
@@ -27,7 +27,7 @@ class KimiClient:
 
     def chat(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         stream: bool = False

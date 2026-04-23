@@ -182,7 +182,7 @@ class ModelRouter(LLMClient):
 
     def chat(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         stream: bool = False,
@@ -241,7 +241,7 @@ class ModelRouter(LLMClient):
 
     async def achat(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         stream: bool = False,

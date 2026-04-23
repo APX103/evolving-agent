@@ -50,6 +50,37 @@
         .dark .chat-scroll::-webkit-scrollbar-thumb {
             background: #4b5563;
         }
+        .image-preview {
+            position: relative;
+            display: inline-block;
+        }
+        .image-preview img {
+            max-height: 80px;
+            border-radius: 8px;
+            border: 1px solid #e5e7eb;
+        }
+        .dark .image-preview img {
+            border-color: #4b5563;
+        }
+        .image-preview .remove-btn {
+            position: absolute;
+            top: -6px;
+            right: -6px;
+            width: 18px;
+            height: 18px;
+            background: #ef4444;
+            color: white;
+            border-radius: 50%;
+            font-size: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            border: 2px solid white;
+        }
+        .dark .image-preview .remove-btn {
+            border-color: #1f2937;
+        }
     </style>
 </head>
 <body class="bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 h-screen overflow-hidden">
@@ -153,6 +184,16 @@
                         placeholder="输入你想说的话，Shift+Enter 换行，Enter 发送..."
                     ></textarea>
                     <button 
+                        id="upload-btn"
+                        class="absolute right-12 bottom-2 w-9 h-9 bg-gray-100 dark:bg-gray-600 hover:bg-gray-200 dark:hover:bg-gray-500 text-gray-600 dark:text-gray-300 rounded-lg flex items-center justify-center transition"
+                        title="上传图片"
+                    >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                        </svg>
+                    </button>
+                    <input type="file" id="image-input" accept="image/*" multiple class="hidden" />
+                    <button 
                         id="send-btn"
                         class="absolute right-2 bottom-2 w-9 h-9 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg flex items-center justify-center transition disabled:opacity-50 disabled:cursor-not-allowed"
                     >
@@ -161,6 +202,7 @@
                         </svg>
                     </button>
                 </div>
+                <div id="image-preview-area" class="max-w-4xl mx-auto mt-2 hidden flex-wrap gap-2"></div>
                 <div class="max-w-4xl mx-auto mt-1.5 text-xs text-gray-400 flex justify-between">
                     <span>支持 /bye /stats /personality 命令</span>
                     <span id="input-stats"></span>
@@ -181,8 +223,14 @@
         const chatMessages = document.getElementById('chat-messages');
         const chatInput = document.getElementById('chat-input');
         const sendBtn = document.getElementById('send-btn');
+        const uploadBtn = document.getElementById('upload-btn');
+        const imageInput = document.getElementById('image-input');
+        const imagePreviewArea = document.getElementById('image-preview-area');
         const connectionIndicator = document.getElementById('connection-indicator');
         const newChatBtn = document.getElementById('new-chat-btn');
+        
+        // 待发送的图片列表
+        let pendingImages = [];
         
         // ── WebSocket 连接 ──
         function connect() {
@@ -255,7 +303,7 @@
         }
         
         // ── UI 操作 ──
-        function addMessage(role, content, isStream = false) {
+        function addMessage(role, content, isStream = false, images = []) {
             const div = document.createElement('div');
             div.className = 'flex gap-3 message-enter';
             
@@ -268,12 +316,20 @@
                 ? 'bg-emerald-500 text-white rounded-2xl rounded-tr-md' 
                 : 'bg-white dark:bg-gray-800 rounded-2xl rounded-tl-md shadow-sm border border-gray-100 dark:border-gray-700';
             
+            let imagesHtml = '';
+            if (images && images.length > 0) {
+                imagesHtml = '<div class="flex flex-wrap gap-2 mt-2">' + 
+                    images.map(img => `<img src="${img}" class="rounded-lg max-w-full max-h-48 object-contain border border-gray-200 dark:border-gray-600" />`).join('') +
+                    '</div>';
+            }
+            
             div.innerHTML = `
                 <div class="w-8 h-8 ${avatarBg} rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0">
                     ${avatarText}
                 </div>
                 <div class="${bubbleClass} px-4 py-3 max-w-3xl prose prose-sm dark:prose-invert">
-                    ${isStream ? '<span class="stream-content"></span><span class="stream-cursor"></span>' : marked.parse(content)}
+                    ${isStream ? '<span class="stream-content"></span><span class="stream-cursor"></span>' : (content ? marked.parse(content) : '')}
+                    ${imagesHtml}
                 </div>
             `;
             
@@ -410,20 +466,73 @@
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
         
+        // ── 图片处理 ──
+        function handleImageSelect(event) {
+            const files = Array.from(event.target.files);
+            const maxSize = 2 * 1024 * 1024; // 2MB
+            
+            files.forEach(file => {
+                if (file.size > maxSize) {
+                    addSystemMessage(`图片 "${file.name}" 超过 2MB 限制，已跳过`, 'error');
+                    return;
+                }
+                
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    pendingImages.push(e.target.result);
+                    updateImagePreview();
+                };
+                reader.readAsDataURL(file);
+            });
+            
+            imageInput.value = '';
+        }
+        
+        function removeImage(index) {
+            pendingImages.splice(index, 1);
+            updateImagePreview();
+        }
+        
+        function updateImagePreview() {
+            if (pendingImages.length === 0) {
+                imagePreviewArea.classList.add('hidden');
+                imagePreviewArea.innerHTML = '';
+                return;
+            }
+            
+            imagePreviewArea.classList.remove('hidden');
+            imagePreviewArea.innerHTML = pendingImages.map((img, idx) => `
+                <div class="image-preview">
+                    <img src="${img}" alt="预览" />
+                    <span class="remove-btn" onclick="removeImage(${idx})">×</span>
+                </div>
+            `).join('');
+        }
+        
         // ── 发送消息 ──
         function sendMessage() {
             const text = chatInput.value.trim();
-            if (!text || !isConnected || isStreaming) return;
+            if ((!text && pendingImages.length === 0) || !isConnected || isStreaming) return;
             
-            addMessage('user', text);
+            addMessage('user', text, false, pendingImages);
             chatInput.value = '';
             chatInput.style.height = 'auto';
             
-            ws.send(JSON.stringify({ text }));
+            const payload = { text };
+            if (pendingImages.length > 0) {
+                // 目前后端只支持单张图片，取第一张
+                payload.image = pendingImages[0];
+            }
+            ws.send(JSON.stringify(payload));
+            
+            pendingImages = [];
+            updateImagePreview();
         }
         
         // ── 事件绑定 ──
         sendBtn.addEventListener('click', sendMessage);
+        uploadBtn.addEventListener('click', () => imageInput.click());
+        imageInput.addEventListener('change', handleImageSelect);
         
         chatInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {

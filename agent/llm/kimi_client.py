@@ -35,11 +35,13 @@ class KimiLLMClient(LLMClient):
         sync_http_client = httpx.Client(
             headers={"User-Agent": user_agent} if user_agent else {},
             event_hooks={"request": [_force_ua]},
+            timeout=httpx.Timeout(30.0, connect=10.0),
         )
         # 异步 HTTP 客户端
         async_http_client = httpx.AsyncClient(
             headers={"User-Agent": user_agent} if user_agent else {},
             event_hooks={"request": [_force_ua]},
+            timeout=httpx.Timeout(30.0, connect=10.0),
         )
 
         self._sync_client = OpenAI(
@@ -66,7 +68,7 @@ class KimiLLMClient(LLMClient):
 
     def chat(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         stream: bool = False,
@@ -187,7 +189,7 @@ class KimiLLMClient(LLMClient):
         )
 
     def quick_chat(self, prompt: str, system: str = "") -> str:
-        messages: List[Dict[str, str]] = []
+        messages: List[Dict[str, Any]] = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
@@ -241,7 +243,7 @@ class KimiLLMClient(LLMClient):
 
     async def achat(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         stream: bool = False,
@@ -332,7 +334,7 @@ class KimiLLMClient(LLMClient):
             )
 
     async def aquick_chat(self, prompt: str, system: str = "") -> str:
-        messages: List[Dict[str, str]] = []
+        messages: List[Dict[str, Any]] = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
@@ -374,7 +376,7 @@ class KimiLLMClient(LLMClient):
         t = kwargs.get("temperature", self.temperature)
         mt = kwargs.get("max_tokens", self.max_tokens)
 
-        messages: List[Dict[str, str]] = []
+        messages: List[Dict[str, Any]] = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
@@ -418,7 +420,7 @@ class KimiLLMClient(LLMClient):
         t = kwargs.get("temperature", self.temperature)
         mt = kwargs.get("max_tokens", self.max_tokens)
 
-        messages: List[Dict[str, str]] = []
+        messages: List[Dict[str, Any]] = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})

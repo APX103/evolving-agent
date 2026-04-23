@@ -248,12 +248,12 @@ class EvolvingAgent:
 
         self.event_bus.publish("session.started", {"agent": self.name})
 
-    async def chat(self, user_input: str):
+    async def chat(self, user_input: str, image: Optional[str] = None):
         if not self.session_active:
             self.start_session()
 
         self._flush_learning_logs()
-        self.event_bus.publish("turn.started", {"user_input": user_input})
+        self.event_bus.publish("turn.started", {"user_input": user_input, "has_image": bool(image)})
 
         # 人格信号微调
         signal_changes = self.personality.apply_signals(user_input)
@@ -286,66 +286,67 @@ class EvolvingAgent:
             feedback_type=feedback_type
         )
 
-        self.memory.add_turn("user", user_input)
+        self.memory.add_turn("user", user_input, image=image)
 
-        # ── PlanningFlow 路由 ──
-        # 显式 /plan 命令 或 自动判断需要规划
-        is_explicit_plan = user_input.strip().startswith("/plan ")
-        should_auto_plan = self.planner.should_plan(user_input)
+        # ── PlanningFlow 路由（图片输入直接跳过，走 LLM）──
+        if not image:
+            is_explicit_plan = user_input.strip().startswith("/plan ")
+            should_auto_plan = self.planner.should_plan(user_input)
 
-        if is_explicit_plan or should_auto_plan:
-            task = user_input.replace("/plan", "").strip() if is_explicit_plan else user_input
-            logger.info(f"  [PlanningFlow] 任务规划: {task[:60]}...")
-            plan = await self.planner.adecompose(task)
+            if is_explicit_plan or should_auto_plan:
+                task = user_input.replace("/plan", "").strip() if is_explicit_plan else user_input
+                logger.info(f"  [PlanningFlow] 任务规划: {task[:60]}...")
+                plan = await self.planner.adecompose(task)
 
-            if plan and plan.steps:
-                logger.info(f"  [PlanningFlow] 生成 {len(plan.steps)} 步计划")
-                plan = await self.executor.arun(plan)
-                response = plan.summary or "计划执行完成。"
+                if plan and plan.steps:
+                    logger.info(f"  [PlanningFlow] 生成 {len(plan.steps)} 步计划")
+                    plan = await self.executor.arun(plan)
+                    response = plan.summary or "计划执行完成。"
 
-                # 记录执行结果
+                    # 记录执行结果
+                    self.memory.add_turn("assistant", response)
+                    try:
+                        self.signal_learner.on_turn_complete(user_input, response)
+                    except Exception:
+                        pass
+
+                    # 如果是流式调用方，需要包装为生成器
+                    def _plan_generator(text):
+                        yield text
+                    return _plan_generator(response)
+                # plan 为 None 表示不需要规划，继续走正常流程
+
+        # Skill 路由（图片输入直接跳过，走 LLM）
+        if not image:
+            ctx = {
+                "memory": self.memory,
+                "personality": self.personality,
+                "short_term": self.memory.short_term,
+            }
+            matched_skill = self.skills.find_handler(user_input, ctx)
+
+            if matched_skill:
+                logger.info(f"  [调用 Skill: {matched_skill.name}]")
+                self.event_bus.publish("skill.executed", {"skill": matched_skill.name, "input": user_input})
+                try:
+                    result = matched_skill.execute(user_input, ctx)
+                    response = result.content
+                    if result.should_learn and result.success:
+                        self.memory.add_knowledge(
+                            category="skill_result",
+                            content=f"[{matched_skill.name}] {user_input} -> {result.content[:200]}",
+                            source=f"skill:{matched_skill.name}"
+                        )
+                except Exception as e:
+                    response = f"[Skill {matched_skill.name} 执行出错] {e}"
+
                 self.memory.add_turn("assistant", response)
                 try:
                     self.signal_learner.on_turn_complete(user_input, response)
                 except Exception:
                     pass
 
-                # 如果是流式调用方，需要包装为生成器
-                def _plan_generator(text):
-                    yield text
-                return _plan_generator(response)
-            # plan 为 None 表示不需要规划，继续走正常流程
-
-        # Skill 路由
-        ctx = {
-            "memory": self.memory,
-            "personality": self.personality,
-            "short_term": self.memory.short_term,
-        }
-        matched_skill = self.skills.find_handler(user_input, ctx)
-
-        if matched_skill:
-            logger.info(f"  [调用 Skill: {matched_skill.name}]")
-            self.event_bus.publish("skill.executed", {"skill": matched_skill.name, "input": user_input})
-            try:
-                result = matched_skill.execute(user_input, ctx)
-                response = result.content
-                if result.should_learn and result.success:
-                    self.memory.add_knowledge(
-                        category="skill_result",
-                        content=f"[{matched_skill.name}] {user_input} -> {result.content[:200]}",
-                        source=f"skill:{matched_skill.name}"
-                    )
-            except Exception as e:
-                response = f"[Skill {matched_skill.name} 执行出错] {e}"
-
-            self.memory.add_turn("assistant", response)
-            try:
-                self.signal_learner.on_turn_complete(user_input, response)
-            except Exception:
-                pass
-
-            return response
+                return response
 
         # LLM 对话
         system_prompt = self._build_system_prompt(user_input)

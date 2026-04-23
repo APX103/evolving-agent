@@ -91,8 +91,9 @@ async def websocket_chat(websocket: WebSocket, client_id: str):
             raw = await websocket.receive_text()
             msg = json.loads(raw)
             user_input = msg.get("text", "").strip()
+            image = msg.get("image")
 
-            if not user_input:
+            if not user_input and not image:
                 continue
 
             # 为每条消息创建根 span
@@ -100,6 +101,7 @@ async def websocket_chat(websocket: WebSocket, client_id: str):
             span = tracer.start_span("websocket.message", attributes={
                 "client_id": client_id,
                 "input_length": len(user_input),
+                "has_image": bool(image),
             })
 
             # 处理特殊命令
@@ -135,7 +137,7 @@ async def websocket_chat(websocket: WebSocket, client_id: str):
 
             try:
                 # 获取 Agent 回复
-                response = await agent.chat(user_input)
+                response = await agent.chat(user_input, image=image)
 
                 # 处理 Skill 直接返回（字符串）
                 if isinstance(response, str):
