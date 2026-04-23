@@ -142,6 +142,15 @@ class RelationshipLog:
                 items.append(e["description"])
         return items[-5:]
 
+    def get_summary(self) -> Dict[str, Any]:
+        """返回关系摘要，用于 Checkpoint 和状态展示"""
+        return {
+            "intimacy": round(self.intimacy, 3),
+            "trust_level": round(self.trust_level, 3),
+            "event_count": len(self.events),
+            "recent_events": self.get_recent_events(limit=3),
+        }
+
     def clear_session(self):
         """清空本次会话的情绪历史（ emotion 模块调用）"""
         pass
