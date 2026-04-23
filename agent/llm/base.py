@@ -3,8 +3,19 @@ LLM 客户端抽象接口
 支持同步 + 异步双模式，后续接入 OpenAI / Claude / 本地模型时只需实现此接口
 """
 from abc import ABC, abstractmethod
-from typing import Any, AsyncGenerator, Dict, Generator, List, Optional, Union
+from typing import Any, AsyncGenerator, Dict, Generator, List, Optional, Type, TypeVar, Union
 import numpy as np
+
+
+T = TypeVar("T")
+
+
+class StructuredOutputError(Exception):
+    """结构化输出解析失败时抛出，附带原始 LLM 文本"""
+
+    def __init__(self, message: str, raw_text: str = ""):
+        super().__init__(message)
+        self.raw_text = raw_text
 
 
 class LLMClient(ABC):
@@ -69,3 +80,73 @@ class LLMClient(ABC):
     async def aembed(self, texts: Union[str, List[str]]) -> np.ndarray:
         """异步文本向量化"""
         pass
+
+    # ── 结构化输出接口 ──
+
+    @staticmethod
+    def _clean_json(text: str) -> str:
+        """清理 markdown 代码块等包裹"""
+        text = text.strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        return text.strip()
+
+    def chat_structured(
+        self,
+        prompt: str,
+        response_model: Type[T],
+        system: str = "",
+        **kwargs,
+    ) -> T:
+        """
+        调用 LLM 并强制解析为指定 Pydantic 模型
+        解析失败时抛出 StructuredOutputError
+        """
+        from pydantic import ValidationError
+
+        raw = self.quick_chat(prompt, system=system)
+        cleaned = self._clean_json(raw)
+        try:
+            return response_model.model_validate_json(cleaned)
+        except ValidationError as e:
+            raise StructuredOutputError(
+                f"Failed to validate structured output: {e}",
+                raw_text=raw,
+            ) from e
+        except Exception as e:
+            raise StructuredOutputError(
+                f"Failed to parse structured output: {e}",
+                raw_text=raw,
+            ) from e
+
+    async def achat_structured(
+        self,
+        prompt: str,
+        response_model: Type[T],
+        system: str = "",
+        **kwargs,
+    ) -> T:
+        """
+        异步调用 LLM 并强制解析为指定 Pydantic 模型
+        解析失败时抛出 StructuredOutputError
+        """
+        from pydantic import ValidationError
+
+        raw = await self.aquick_chat(prompt, system=system)
+        cleaned = self._clean_json(raw)
+        try:
+            return response_model.model_validate_json(cleaned)
+        except ValidationError as e:
+            raise StructuredOutputError(
+                f"Failed to validate structured output: {e}",
+                raw_text=raw,
+            ) from e
+        except Exception as e:
+            raise StructuredOutputError(
+                f"Failed to parse structured output: {e}",
+                raw_text=raw,
+            ) from e

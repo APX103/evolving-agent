@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from agent.multi_agent.base import BaseAgent, AgentContext, AgentResponse, IntentClassification
 from agent.multi_agent.handoff import HandoffRequest, HandoffProtocol
 from agent.plan import Plan, Step, StepStatus
+from agent.observability import get_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,9 @@ class ExecutorAgent(BaseAgent):
 
     async def process(self, user_input: str, context: AgentContext) -> AgentResponse:
         """执行当前计划"""
+        tracer = get_tracer()
+        span = tracer.start_span("executor.process", attributes={"agent": self.name})
+
         # 从 working_memory 获取计划
         plan_dict = context.working_memory.get("current_plan")
         if not plan_dict:
@@ -45,6 +49,8 @@ class ExecutorAgent(BaseAgent):
             plan_dict = self.working_memory.get("current_plan")
 
         if not plan_dict:
+            span.set_attribute("error", "no_plan")
+            span.end()
             return AgentResponse(
                 content="没有找到可执行的计划。请先让 Planner 生成计划。",
                 agent_name=self.name,
@@ -52,7 +58,15 @@ class ExecutorAgent(BaseAgent):
             )
 
         plan = self._dict_to_plan(plan_dict)
-        executed_plan = await self._execute_plan(plan, context)
+        span.set_attribute("plan_task", plan.task)
+        span.set_attribute("step_count", len(plan.steps))
+
+        try:
+            executed_plan = await self._execute_plan(plan, context)
+        except Exception as e:
+            span.record_exception(e)
+            span.end()
+            raise
 
         # 更新 working_memory
         self.working_memory["current_plan"] = executed_plan.to_dict()
@@ -62,6 +76,9 @@ class ExecutorAgent(BaseAgent):
         }
 
         summary = self._generate_summary(executed_plan)
+        span.set_attribute("success_count", sum(1 for s in executed_plan.steps if s.status == StepStatus.SUCCESS))
+        span.set_attribute("failed_count", sum(1 for s in executed_plan.steps if s.status == StepStatus.FAILED))
+        span.end()
 
         return AgentResponse(
             content=summary,
@@ -112,6 +129,13 @@ class ExecutorAgent(BaseAgent):
 
     async def _execute_step(self, step: Step, context: AgentContext):
         """执行单个步骤"""
+        tracer = get_tracer()
+        span = tracer.start_span("executor.step", attributes={
+            "step_id": step.id,
+            "tool": step.tool,
+            "description": step.description,
+        })
+
         logger.info(f"[Executor] Step {step.id}: {step.description} [{step.tool}]")
         step.status = StepStatus.RUNNING
 
@@ -119,10 +143,12 @@ class ExecutorAgent(BaseAgent):
             result = await self._invoke_tool_for_step(step, context)
             step.result = str(result) if result is not None else ""
             step.status = StepStatus.SUCCESS
+            span.set_attribute("result_length", len(step.result))
             logger.info(f"[Executor] Step {step.id} 成功")
         except Exception as e:
             step.error = str(e)
             step.retry_count += 1
+            span.record_exception(e)
 
             if step.retry_count <= self.max_retries:
                 step.status = StepStatus.RETRYING
@@ -133,14 +159,21 @@ class ExecutorAgent(BaseAgent):
                     step.result = str(result) if result is not None else ""
                     step.status = StepStatus.SUCCESS
                     step.error = None
+                    span.set_attribute("result_length", len(step.result))
+                    span.set_attribute("retried", True)
                     logger.info(f"[Executor] Step {step.id} 重试成功")
                 except Exception as e2:
                     step.error = f"{e} -> 重试失败: {e2}"
                     step.status = StepStatus.FAILED
+                    span.record_exception(e2)
+                    span.set_attribute("failed", True)
                     logger.error(f"[Executor] Step {step.id} 最终失败")
             else:
                 step.status = StepStatus.FAILED
+                span.set_attribute("failed", True)
                 logger.error(f"[Executor] Step {step.id} 失败（已达最大重试）")
+        finally:
+            span.end()
 
     async def _invoke_tool_for_step(self, step: Step, context: AgentContext) -> Any:
         """调用步骤对应的工具"""

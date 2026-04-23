@@ -4,7 +4,7 @@
 import os
 import re
 import subprocess
-from typing import Dict
+from typing import Dict, Optional
 import logging
 
 from simpleeval import simple_eval

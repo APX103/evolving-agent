@@ -3,7 +3,6 @@ Router Agent - 意图分类与 Agent 调度
 """
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -15,6 +14,7 @@ from agent.multi_agent.base import (
     HandoffRequest,
     LayerType,
 )
+from agent.observability import get_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -65,14 +65,20 @@ class RouterAgent(BaseAgent):
         """LLM 意图分类"""
         prompt = self._build_classify_prompt(user_input, context)
 
-        messages = [
-            {"role": "system", "content": self.system_prompt_template},
-            {"role": "user", "content": prompt},
-        ]
-
         try:
-            response = await self._call_llm(messages, temperature=0.3, max_tokens=256)
-            return self._parse_intent(response)
+            intent = await self.llm.achat_structured(
+                prompt,
+                response_model=IntentClassification,
+                system=self.system_prompt_template,
+                temperature=0.3,
+                max_tokens=256,
+            )
+            # 验证 target_agent 有效性
+            if intent.target_agent not in INTENT_AGENT_MAP.values():
+                intent.target_agent = INTENT_AGENT_MAP.get(intent.primary_intent, "companion")
+            # 确保 confidence 在合法范围
+            intent.confidence = min(1.0, max(0.0, intent.confidence))
+            return intent
         except Exception as e:
             logger.warning(f"[Router] LLM 分类失败: {e}")
             return self._fallback_classify(user_input)
@@ -102,32 +108,6 @@ class RouterAgent(BaseAgent):
 - plan: 复杂多步骤任务
 - tool: 计算、文件操作、Shell 命令"""
         return prompt
-
-    def _parse_intent(self, response: str) -> IntentClassification:
-        """解析 LLM 输出的 JSON"""
-        try:
-            cleaned = response.strip().strip("`").replace("```json", "").replace("```", "")
-            data = json.loads(cleaned)
-
-            intent_name = data.get("primary_intent", "chat")
-            confidence = float(data.get("confidence", 0.5))
-            target = data.get("target_agent", INTENT_AGENT_MAP.get(intent_name, "companion"))
-            needs_planning = data.get("needs_planning", False)
-
-            # 验证 target_agent 有效性
-            if target not in INTENT_AGENT_MAP.values():
-                target = INTENT_AGENT_MAP.get(intent_name, "companion")
-
-            return IntentClassification(
-                primary_intent=intent_name,
-                confidence=min(1.0, max(0.0, confidence)),
-                target_agent=target,
-                parameters=data.get("parameters", {}),
-                needs_planning=needs_planning,
-            )
-        except (json.JSONDecodeError, KeyError, ValueError) as e:
-            logger.warning(f"[Router] JSON 解析失败: {e}, response={response[:200]}")
-            return self._fallback_classify(response)
 
     def _fallback_classify(self, user_input: str) -> IntentClassification:
         """关键词降级匹配"""

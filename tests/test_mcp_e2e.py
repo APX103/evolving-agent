@@ -7,8 +7,8 @@ MCP 端到端测试
 import os
 import sys
 import asyncio
-import subprocess
-import time
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -19,6 +19,8 @@ def log(msg):
     print(f"[E2E] {msg}")
 
 
+@pytest.mark.slow
+@pytest.mark.asyncio
 async def test_mcp_connection():
     log("=" * 50)
     log("测试 MCP 端到端连接")

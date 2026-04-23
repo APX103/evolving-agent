@@ -21,8 +21,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent.knowledge_graph import KnowledgeGraph, Triple
 from agent.semantic_detector import SemanticSignalDetector
-from agent.quality_judge import QualityJudge
-from agent.learner import Learner
 
 
 # ============================================================================
@@ -217,6 +215,7 @@ class TestSemanticSignalDetector(unittest.TestCase):
 # ============================================================================
 class TestQualityJudge(unittest.TestCase):
     def setUp(self):
+        from agent.quality_judge import QualityJudge
         self.mock_llm = MagicMock()
         self.judge = QualityJudge(self.mock_llm)
 
@@ -271,6 +270,7 @@ class TestQualityJudge(unittest.TestCase):
 # ============================================================================
 class TestLearner(unittest.TestCase):
     def setUp(self):
+        from agent.learner import Learner
         self.mock_llm = MagicMock()
         self.mock_memory = MagicMock()
         self.mock_memory.search_knowledge = MagicMock(return_value=[])

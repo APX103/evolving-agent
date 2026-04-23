@@ -4,13 +4,18 @@ Kimi LLM 客户端实现
 支持同步 + 异步双模式
 """
 import asyncio
-from typing import Any, AsyncGenerator, Dict, Generator, List, Optional, Union
+import time
+from typing import Any, AsyncGenerator, Dict, Generator, List, Optional, Type, TypeVar, Union
 
 import numpy as np
 from openai import AsyncOpenAI, OpenAI
 
 from agent.config import Config
-from agent.llm.base import LLMClient
+from agent.llm.base import LLMClient, StructuredOutputError
+from agent.observability import get_tracer, get_llm_logger
+
+
+T = TypeVar("T")
 
 
 class KimiLLMClient(LLMClient):
@@ -67,6 +72,11 @@ class KimiLLMClient(LLMClient):
         t = temperature if temperature is not None else self.temperature
         mt = max_tokens if max_tokens is not None else self.max_tokens
 
+        tracer = get_tracer()
+        llm_logger = get_llm_logger()
+        span = tracer.start_span("llm.chat", attributes={"model": self.model, "stream": stream, "sync": True})
+        start = time.time()
+
         try:
             if stream:
                 response = self._sync_client.chat.completions.create(
@@ -76,7 +86,9 @@ class KimiLLMClient(LLMClient):
                     max_tokens=mt,
                     stream=True,
                 )
-                return self._stream_generator(response)
+                return self._stream_generator_with_trace(
+                    response, span, start, llm_logger, messages
+                )
             else:
                 response = self._sync_client.chat.completions.create(
                     model=self.model,
@@ -85,9 +97,17 @@ class KimiLLMClient(LLMClient):
                     max_tokens=mt,
                     stream=False,
                 )
+                latency_ms = (time.time() - start) * 1000
                 msg = response.choices[0].message
-                return msg.content or getattr(msg, "reasoning_content", None) or ""
+                content = msg.content or getattr(msg, "reasoning_content", None) or ""
+                prompt_text = messages[-1].get("content", "") if messages else ""
+                self._finish_llm_span(span, llm_logger, response, latency_ms, prompt_text, content)
+                return content
         except Exception as e:
+            latency_ms = (time.time() - start) * 1000
+            span.set_attribute("error", True)
+            span.record_exception(e)
+            span.end()
             error_msg = f"[Kimi API 错误] {str(e)}"
             if stream:
                 return error_msg
@@ -100,6 +120,66 @@ class KimiLLMClient(LLMClient):
                 text = delta.content or getattr(delta, "reasoning_content", None) or ""
                 if text:
                     yield text
+
+    def _stream_generator_with_trace(self, response, span, start, llm_logger, messages):
+        """带追踪的流式生成器"""
+        full_text = ""
+        try:
+            for chunk in response:
+                if chunk.choices and chunk.choices[0].delta:
+                    delta = chunk.choices[0].delta
+                    text = delta.content or getattr(delta, "reasoning_content", None) or ""
+                    if text:
+                        full_text += text
+                        yield text
+        except Exception as e:
+            span.record_exception(e)
+            raise
+        finally:
+            latency_ms = (time.time() - start) * 1000
+            prompt_text = messages[-1].get("content", "") if messages else ""
+            span.set_attribute("response_length", len(full_text))
+            span.end()
+            llm_logger.log_call(
+                model=self.model,
+                prompt_tokens=0,
+                completion_tokens=0,
+                latency_ms=latency_ms,
+                prompt_sample=prompt_text,
+                response_sample=full_text,
+                trace_id=span.trace_id,
+                span_id=span.span_id,
+                extra={"stream": True, "sync": True},
+            )
+
+    def _finish_llm_span(self, span, llm_logger, response, latency_ms, prompt_text, content):
+        """完成 LLM span 并记录日志"""
+        prompt_tokens = 0
+        completion_tokens = 0
+        try:
+            if hasattr(response, "usage") and response.usage:
+                prompt_tokens = getattr(response.usage, "prompt_tokens", 0) or 0
+                completion_tokens = getattr(response.usage, "completion_tokens", 0) or 0
+        except Exception:
+            pass
+
+        span.set_attribute("latency_ms", round(latency_ms, 2))
+        span.set_attribute("prompt_tokens", prompt_tokens)
+        span.set_attribute("completion_tokens", completion_tokens)
+        span.set_attribute("response_length", len(content))
+        span.end()
+
+        llm_logger.log_call(
+            model=self.model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            latency_ms=latency_ms,
+            prompt_sample=prompt_text,
+            response_sample=content,
+            trace_id=span.trace_id,
+            span_id=span.span_id,
+            extra={"stream": False},
+        )
 
     def quick_chat(self, prompt: str, system: str = "") -> str:
         messages: List[Dict[str, str]] = []
@@ -164,6 +244,11 @@ class KimiLLMClient(LLMClient):
         t = temperature if temperature is not None else self.temperature
         mt = max_tokens if max_tokens is not None else self.max_tokens
 
+        tracer = get_tracer()
+        llm_logger = get_llm_logger()
+        span = tracer.start_span("llm.achat", attributes={"model": self.model, "stream": stream, "sync": False})
+        start = time.time()
+
         try:
             if stream:
                 response = await self._async_client.chat.completions.create(
@@ -173,7 +258,9 @@ class KimiLLMClient(LLMClient):
                     max_tokens=mt,
                     stream=True,
                 )
-                return self._astream_generator(response)
+                return self._astream_generator_with_trace(
+                    response, span, start, llm_logger, messages
+                )
             else:
                 response = await self._async_client.chat.completions.create(
                     model=self.model,
@@ -182,12 +269,19 @@ class KimiLLMClient(LLMClient):
                     max_tokens=mt,
                     stream=False,
                 )
+                latency_ms = (time.time() - start) * 1000
                 msg = response.choices[0].message
-                return msg.content or getattr(msg, "reasoning_content", None) or ""
+                content = msg.content or getattr(msg, "reasoning_content", None) or ""
+                prompt_text = messages[-1].get("content", "") if messages else ""
+                self._finish_llm_span(span, llm_logger, response, latency_ms, prompt_text, content)
+                return content
         except Exception as e:
+            latency_ms = (time.time() - start) * 1000
+            span.set_attribute("error", True)
+            span.record_exception(e)
+            span.end()
             error_msg = f"[Kimi API 错误] {str(e)}"
             if stream:
-                # 返回一个立即 yield 错误消息的异步生成器
                 async def _error_gen():
                     yield error_msg
                 return _error_gen()
@@ -200,6 +294,37 @@ class KimiLLMClient(LLMClient):
                 text = delta.content or getattr(delta, "reasoning_content", None) or ""
                 if text:
                     yield text
+
+    async def _astream_generator_with_trace(self, response, span, start, llm_logger, messages):
+        """带追踪的异步流式生成器"""
+        full_text = ""
+        try:
+            async for chunk in response:
+                if chunk.choices and chunk.choices[0].delta:
+                    delta = chunk.choices[0].delta
+                    text = delta.content or getattr(delta, "reasoning_content", None) or ""
+                    if text:
+                        full_text += text
+                        yield text
+        except Exception as e:
+            span.record_exception(e)
+            raise
+        finally:
+            latency_ms = (time.time() - start) * 1000
+            prompt_text = messages[-1].get("content", "") if messages else ""
+            span.set_attribute("response_length", len(full_text))
+            span.end()
+            llm_logger.log_call(
+                model=self.model,
+                prompt_tokens=0,
+                completion_tokens=0,
+                latency_ms=latency_ms,
+                prompt_sample=prompt_text,
+                response_sample=full_text,
+                trace_id=span.trace_id,
+                span_id=span.span_id,
+                extra={"stream": True, "sync": False},
+            )
 
     async def aquick_chat(self, prompt: str, system: str = "") -> str:
         messages: List[Dict[str, str]] = []
@@ -229,3 +354,93 @@ class KimiLLMClient(LLMClient):
         if arr.ndim == 1:
             arr = arr.reshape(1, -1)
         return arr
+
+    # ── 结构化输出接口（使用 OpenAI JSON mode） ──
+
+    def chat_structured(
+        self,
+        prompt: str,
+        response_model: Type[T],
+        system: str = "",
+        **kwargs,
+    ) -> T:
+        from pydantic import ValidationError
+
+        t = kwargs.get("temperature", self.temperature)
+        mt = kwargs.get("max_tokens", self.max_tokens)
+
+        messages: List[Dict[str, str]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            response = self._sync_client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=t,
+                max_tokens=mt,
+                response_format={"type": "json_object"},
+            )
+            raw = response.choices[0].message.content or ""
+        except Exception:
+            # Fallback: 普通 quick_chat（可能模型不支持 json_object）
+            raw = self.quick_chat(prompt, system=system)
+
+        cleaned = self._clean_json(raw)
+        try:
+            return response_model.model_validate_json(cleaned)
+        except ValidationError as e:
+            raise StructuredOutputError(
+                f"Failed to validate structured output: {e}",
+                raw_text=raw,
+            ) from e
+        except Exception as e:
+            raise StructuredOutputError(
+                f"Failed to parse structured output: {e}",
+                raw_text=raw,
+            ) from e
+
+    async def achat_structured(
+        self,
+        prompt: str,
+        response_model: Type[T],
+        system: str = "",
+        **kwargs,
+    ) -> T:
+        from pydantic import ValidationError
+
+        t = kwargs.get("temperature", self.temperature)
+        mt = kwargs.get("max_tokens", self.max_tokens)
+
+        messages: List[Dict[str, str]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            response = await self._async_client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=t,
+                max_tokens=mt,
+                response_format={"type": "json_object"},
+            )
+            raw = response.choices[0].message.content or ""
+        except Exception:
+            # Fallback: 普通 aquick_chat
+            raw = await self.aquick_chat(prompt, system=system)
+
+        cleaned = self._clean_json(raw)
+        try:
+            return response_model.model_validate_json(cleaned)
+        except ValidationError as e:
+            raise StructuredOutputError(
+                f"Failed to validate structured output: {e}",
+                raw_text=raw,
+            ) from e
+        except Exception as e:
+            raise StructuredOutputError(
+                f"Failed to parse structured output: {e}",
+                raw_text=raw,
+            ) from e

@@ -7,8 +7,6 @@ Phase 2 功能测试
 """
 import os
 import sys
-import shutil
-import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -27,58 +25,50 @@ def test_user_context():
     print("   ✅ UserContext 路径正确")
 
 
-def test_procedural_memory():
+def test_procedural_memory(tmp_path):
     """测试程序记忆的增删改查"""
     print("[Phase2] 测试 ProceduralMemory...")
-    tmpdir = tempfile.mkdtemp()
-    try:
-        pm = ProceduralMemory(storage_path=tmpdir)
+    pm = ProceduralMemory(storage_path=str(tmp_path))
 
-        # 添加规则
-        rule = pm.add_rule("询问技术问题", "先确认技术栈和版本", confidence=0.8)
-        assert rule.pattern == "询问技术问题"
-        assert rule.confidence == 0.8
+    # 添加规则
+    rule = pm.add_rule("询问技术问题", "先确认技术栈和版本", confidence=0.8)
+    assert rule.pattern == "询问技术问题"
+    assert rule.confidence == 0.8
 
-        # 重复添加应升级
-        rule2 = pm.add_rule("询问技术问题", "先确认技术栈和版本", confidence=0.9)
-        assert rule2.confidence == 0.9
-        assert len(pm.list_rules()) == 1
+    # 重复添加应升级
+    rule2 = pm.add_rule("询问技术问题", "先确认技术栈和版本", confidence=0.9)
+    assert rule2.confidence == 0.9
+    assert len(pm.list_rules()) == 1
 
-        # 检索
-        rules = pm.get_relevant_rules("我遇到一个 React bug")
-        assert len(rules) >= 1
-        assert rules[0].pattern == "询问技术问题"
+    # 检索
+    rules = pm.get_relevant_rules("我遇到一个 React bug")
+    assert len(rules) >= 1
+    assert rules[0].pattern == "询问技术问题"
 
-        # prompt 文本
-        prompt = pm.get_prompt_text("React bug")
-        assert "learned behaviors" in prompt
-        assert "先确认技术栈和版本" in prompt
+    # prompt 文本
+    prompt = pm.get_prompt_text("React bug")
+    assert "learned behaviors" in prompt
+    assert "先确认技术栈和版本" in prompt
 
-        # 删除
-        assert pm.remove_rule("询问技术问题") is True
-        assert len(pm.list_rules()) == 0
-        print("   ✅ ProceduralMemory CRUD 正常")
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+    # 删除
+    assert pm.remove_rule("询问技术问题") is True
+    assert len(pm.list_rules()) == 0
+    print("   ✅ ProceduralMemory CRUD 正常")
 
 
-def test_procedural_memory_learn():
+def test_procedural_memory_learn(tmp_path):
     """测试程序记忆从反馈学习"""
     print("[Phase2] 测试 ProceduralMemory 反馈学习...")
-    tmpdir = tempfile.mkdtemp()
-    try:
-        pm = ProceduralMemory(storage_path=tmpdir)
-        pm.learn_from_feedback("怎么解决这个 bug？", "试试重启", "positive")
-        rules = pm.list_rules()
-        assert len(rules) >= 1
-        assert any("技术" in r.pattern for r in rules)
+    pm = ProceduralMemory(storage_path=str(tmp_path))
+    pm.learn_from_feedback("怎么解决这个 bug？", "试试重启", "positive")
+    rules = pm.list_rules()
+    assert len(rules) >= 1
+    assert any("技术" in r.pattern for r in rules)
 
-        pm.learn_from_feedback("你错了", "不对", "corrected", correction="用户不喜欢被说教")
-        rules = pm.list_rules()
-        assert any("用户不喜欢被说教" in r.action for r in rules)
-        print("   ✅ ProceduralMemory 学习正常")
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+    pm.learn_from_feedback("你错了", "不对", "corrected", correction="用户不喜欢被说教")
+    rules = pm.list_rules()
+    assert any("用户不喜欢被说教" in r.action for r in rules)
+    print("   ✅ ProceduralMemory 学习正常")
 
 
 def test_context_compressor_simple():
@@ -148,9 +138,16 @@ def test_full_compressed_context():
 
 
 if __name__ == "__main__":
+    import tempfile
+    import shutil
+
     test_user_context()
-    test_procedural_memory()
-    test_procedural_memory_learn()
+    _tmp = tempfile.mkdtemp()
+    try:
+        test_procedural_memory(_tmp)
+        test_procedural_memory_learn(_tmp)
+    finally:
+        shutil.rmtree(_tmp, ignore_errors=True)
     test_context_compressor_simple()
     test_context_compressor_llm()
     test_full_compressed_context()

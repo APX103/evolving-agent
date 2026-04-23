@@ -4,7 +4,10 @@
 """
 import os
 from typing import Any, Dict
+
 import yaml
+
+from agent.config_models import AppConfig
 
 
 class Config:
@@ -24,6 +27,7 @@ class Config:
         with open(config_path, "r", encoding="utf-8") as f:
             self._config = yaml.safe_load(f) or {}
         self._path = config_path
+        self._validated = AppConfig.model_validate(self._config)
 
     @property
     def raw(self) -> Dict[str, Any]:
@@ -31,15 +35,15 @@ class Config:
 
     @property
     def kimi(self) -> Dict[str, Any]:
-        return self._config.get("kimi", {})
+        return self._validated.kimi.model_dump()
 
     @property
     def agent(self) -> Dict[str, Any]:
-        return self._config.get("agent", {})
+        return self._validated.agent.model_dump()
 
     @property
     def storage(self) -> Dict[str, Any]:
-        return self._config.get("storage", {})
+        return self._validated.storage.model_dump()
 
     def get(self, key: str, default: Any = None) -> Any:
         """支持点号分隔路径，如 'agent.name'"""

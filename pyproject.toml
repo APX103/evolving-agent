@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evolving-agent"
+version = "0.1.0"
+description = "Evolving Agent with adaptive memory and skills"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-v --tb=short"
+markers = [
+    "integration: marks tests that hit real external APIs (deselect with '-m \"not integration\"')",
+    "slow: marks tests that take a long time to run (deselect with '-m \"not slow\"')",
+]
+
+[tool.mypy]
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_redundant_casts = true

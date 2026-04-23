@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Any
 
 from agent.multi_agent.base import BaseAgent, AgentContext, AgentResponse, IntentClassification
 from agent.multi_agent.context_manager import ContextManager
+from agent.observability import get_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -37,37 +38,50 @@ class AgentRegistry:
         if not self._router:
             raise RuntimeError("Router 未设置")
 
-        # 1. 构建上下文
-        if self.context_manager:
-            context = await self.context_manager.build_context(user_id, query=user_input, source=source)
-        else:
-            context = AgentContext(user_id=user_id, source=source)
+        tracer = get_tracer()
+        span = tracer.start_span("registry.process", attributes={"user_id": user_id, "source": source})
+        span.set_attribute("input_length", len(user_input))
 
-        # 2. 意图分类
         try:
-            intent = await self._router.classify(user_input, context)
-        except Exception as e:
-            logger.warning(f"[AgentRegistry] 意图分类失败: {e}，使用 fallback")
-            intent = self._fallback_classify(user_input)
+            # 1. 构建上下文
+            if self.context_manager:
+                context = await self.context_manager.build_context(user_id, query=user_input, source=source)
+            else:
+                context = AgentContext(user_id=user_id, source=source)
 
-        logger.info(f"[AgentRegistry] 意图: {intent.primary_intent} -> {intent.target_agent} (置信度: {intent.confidence:.2f})")
+            # 2. 意图分类
+            try:
+                intent = await self._router.classify(user_input, context)
+            except Exception as e:
+                logger.warning(f"[AgentRegistry] 意图分类失败: {e}，使用 fallback")
+                intent = self._fallback_classify(user_input)
 
-        # 3. 选择 Agent
-        agent = self._select_agent(intent)
+            logger.info(f"[AgentRegistry] 意图: {intent.primary_intent} -> {intent.target_agent} (置信度: {intent.confidence:.2f})")
+            span.set_attribute("intent", intent.primary_intent)
+            span.set_attribute("target_agent", intent.target_agent)
+            span.set_attribute("confidence", round(intent.confidence, 3))
 
-        # 4. 执行
-        try:
-            response = await agent.process(user_input, context)
-            response.metadata["intent"] = intent.primary_intent
-            response.metadata["agent"] = agent.name
-            return response
-        except Exception as e:
-            logger.error(f"[AgentRegistry] Agent {agent.name} 执行失败: {e}")
-            return AgentResponse(
-                content=f"抱歉，处理时出了点问题: {e}",
-                agent_name=agent.name,
-                metadata={"error": str(e)}
-            )
+            # 3. 选择 Agent
+            agent = self._select_agent(intent)
+            span.set_attribute("selected_agent", agent.name)
+
+            # 4. 执行
+            try:
+                response = await agent.process(user_input, context)
+                response.metadata["intent"] = intent.primary_intent
+                response.metadata["agent"] = agent.name
+                span.set_attribute("response_length", len(response.content))
+                return response
+            except Exception as e:
+                logger.error(f"[AgentRegistry] Agent {agent.name} 执行失败: {e}")
+                span.record_exception(e)
+                return AgentResponse(
+                    content=f"抱歉，处理时出了点问题: {e}",
+                    agent_name=agent.name,
+                    metadata={"error": str(e)}
+                )
+        finally:
+            span.end()
 
     def _select_agent(self, intent: IntentClassification) -> BaseAgent:
         # 策略 1: Router 指定了目标 Agent
@@ -101,10 +115,10 @@ class AgentRegistry:
         research_keywords = ["调研", "搜索", "查一下", "资料", "信息", "对比", "区别", "什么是"]
 
         if any(k in text for k in code_keywords):
-            return IntentClassification("code", 0.7, "coder")
+            return IntentClassification(primary_intent="code", confidence=0.7, target_agent="coder")
         if any(k in text for k in research_keywords):
-            return IntentClassification("research", 0.7, "researcher")
-        return IntentClassification("chat", 0.5, "companion")
+            return IntentClassification(primary_intent="research", confidence=0.7, target_agent="researcher")
+        return IntentClassification(primary_intent="chat", confidence=0.5, target_agent="companion")
 
     def list_agents(self) -> List[Dict]:
         return [{"name": a.name, "description": a.description} for a in self._agents.values()]

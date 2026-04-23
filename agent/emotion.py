@@ -3,9 +3,10 @@
 分析用户话语中的情绪状态，生成适配的回应策略
 不只是关键词匹配，而是用 LLM 做深度情绪分析
 """
-import json
 from typing import Dict, List
 from datetime import datetime
+
+from pydantic import BaseModel, Field
 
 from agent.llm.base import LLMClient
 
@@ -51,6 +52,14 @@ EMOTION_RESPONSE_MAP = {
 }
 
 
+class EmotionAnalysisResult(BaseModel):
+    """情绪分析结果 Schema"""
+    label: str = "平静"
+    intensity: float = Field(default=0.5, ge=0.0, le=1.0)
+    needs: List[str] = Field(default_factory=list)
+    subtle_signals: str = ""
+
+
 class EmotionSensor:
     """
     情绪传感器：分析用户输入的情绪，提供回应策略
@@ -88,25 +97,26 @@ class EmotionSensor:
 只返回 JSON，不要其他文字。"""
 
         try:
-            response = self.llm_client.quick_chat(
+            result = self.llm_client.chat_structured(
                 prompt,
-                system="你是一位敏锐的情绪分析师，擅长从文字中读出言外之意。"
+                response_model=EmotionAnalysisResult,
+                system="你是一位敏锐的情绪分析师，擅长从文字中读出言外之意。",
             )
-            result = self._parse_json(response)
 
             # 校验标签
-            if result.get("label") not in EMOTION_RESPONSE_MAP:
-                result["label"] = "平静"
+            if result.label not in EMOTION_RESPONSE_MAP:
+                result.label = "平静"
 
-            # 确保 intensity 在范围内
-            result["intensity"] = max(0.0, min(1.0, float(result.get("intensity", 0.5))))
+            # 确保 intensity 在范围内（Pydantic 已校验，但再做一层保险）
+            result.intensity = max(0.0, min(1.0, result.intensity))
 
-            # 记录
-            result["timestamp"] = datetime.now().isoformat()
-            result["text_preview"] = text[:50]
-            self.session_emotions.append(result)
+            # 转换为 dict 保持向后兼容
+            result_dict = result.model_dump()
+            result_dict["timestamp"] = datetime.now().isoformat()
+            result_dict["text_preview"] = text[:50]
+            self.session_emotions.append(result_dict)
 
-            return result
+            return result_dict
 
         except Exception as e:
             return {
@@ -159,16 +169,3 @@ class EmotionSensor:
         if first != last:
             return f"用户情绪从「{first}」变为「{last}」，主导情绪是「{most_common}」"
         return f"用户整体情绪以「{most_common}」为主"
-
-    def _parse_json(self, text: str) -> Dict:
-        try:
-            cleaned = text.strip()
-            if cleaned.startswith("```json"):
-                cleaned = cleaned[7:]
-            if cleaned.startswith("```"):
-                cleaned = cleaned[3:]
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3]
-            return json.loads(cleaned.strip())
-        except Exception:
-            return {}

@@ -5,10 +5,20 @@ Handoff 协议 - Agent 间状态传递
 import logging
 from typing import Dict, List
 
+from pydantic import BaseModel, Field
+
 from agent.multi_agent.base import BaseAgent, AgentContext, AgentResponse, HandoffRequest, HandoffResult
 from agent.multi_agent.registry import AgentRegistry
+from agent.observability import get_tracer
 
 logger = logging.getLogger(__name__)
+
+
+class VerificationResult(BaseModel):
+    """内容审查结果 Schema"""
+    passed: bool
+    feedback: str
+    score: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class HandoffProtocol:
@@ -18,9 +28,18 @@ class HandoffProtocol:
 
     async def handoff(self, request: HandoffRequest) -> HandoffResult:
         """执行 Agent 间交接"""
+        tracer = get_tracer()
+        span = tracer.start_span("handoff.handoff", attributes={
+            "source_agent": request.from_agent,
+            "target_agent": request.to_agent,
+            "reason": request.handoff_reason,
+        })
+
         agent = self.registry.get_agent(request.to_agent)
         if not agent:
             logger.error(f"[Handoff] 目标 Agent {request.to_agent} 不存在")
+            span.set_attribute("error", "agent_not_found")
+            span.end()
             return HandoffResult(
                 from_agent=request.to_agent,
                 response=f"[错误] Agent {request.to_agent} 未找到",
@@ -48,6 +67,8 @@ class HandoffProtocol:
         # 调用目标 Agent
         try:
             response = await agent.process(request.user_input, context)
+            span.set_attribute("response_length", len(response.content))
+            span.end()
             return HandoffResult(
                 from_agent=request.to_agent,
                 response=response.content,
@@ -56,6 +77,8 @@ class HandoffProtocol:
             )
         except Exception as e:
             logger.error(f"[Handoff] Agent {request.to_agent} 处理失败: {e}")
+            span.record_exception(e)
+            span.end()
             return HandoffResult(
                 from_agent=request.to_agent,
                 response=f"[错误] 处理失败: {e}",
@@ -199,24 +222,18 @@ class HandoffProtocol:
 
     def _parse_verification(self, text: str) -> Dict:
         """解析 verifier 的 JSON 输出"""
-        import json
         import re
         try:
             # 提取 JSON 块
             m = re.search(r'\{.*\}', text, re.DOTALL)
             if m:
-                data = json.loads(m.group())
-                return {
-                    "passed": bool(data.get("passed", False)),
-                    "feedback": str(data.get("feedback", text[:200])),
-                    "score": float(data.get("score", 0.0)),
-                }
+                return VerificationResult.model_validate_json(m.group()).model_dump()
         except Exception:
             pass
         # Fallback: 基于关键词判断
         passed = "通过" in text or "passed" in text.lower() or "合格" in text
-        return {
-            "passed": passed,
-            "feedback": text[:500],
-            "score": 0.7 if passed else 0.3,
-        }
+        return VerificationResult(
+            passed=passed,
+            feedback=text[:500],
+            score=0.7 if passed else 0.3,
+        ).model_dump()

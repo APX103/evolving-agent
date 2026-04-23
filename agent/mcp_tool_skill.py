@@ -3,12 +3,21 @@ MCP Tool → Skill 适配器
 让 Agent 的 SkillRegistry 能够调用 MCP Server 提供的工具
 """
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
+
+from pydantic import BaseModel, Field
 
 from agent.skill import Skill, SkillResult
 from agent.mcp_client import MCPClient, MCPCallResult
 
 logger = logging.getLogger(__name__)
+
+
+class McpToolDecision(BaseModel):
+    """MCP 工具路由决策 Schema"""
+    tool: Optional[str] = None
+    arguments: Dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
 
 
 class MCPToolSkill(Skill):
@@ -131,11 +140,13 @@ class MCPRouterSkill(Skill):
 如果没有合适工具，输出 {{"tool": null}}"""
             
             try:
-                raw = self.llm_client.quick_chat(prompt, system="你只输出 JSON，不要解释。")
-                import json
-                decision = json.loads(raw.strip().strip("`").replace("```json", "").replace("```", ""))
-                tool_name = decision.get("tool")
-                arguments = decision.get("arguments", {})
+                decision = self.llm_client.chat_structured(
+                    prompt,
+                    response_model=McpToolDecision,
+                    system="你只输出 JSON，不要解释。",
+                )
+                tool_name = decision.tool
+                arguments = decision.arguments
                 
                 if not tool_name:
                     return SkillResult(content="没有找到合适的工具来处理这个请求。", success=False)
@@ -144,7 +155,7 @@ class MCPRouterSkill(Skill):
                 if result.success:
                     return SkillResult(
                         content=f"【{tool_name}】\n{result.content}",
-                        metadata={"tool": tool_name, "args": arguments, "reason": decision.get("reason", "")}
+                        metadata={"tool": tool_name, "args": arguments, "reason": decision.reason}
                     )
                 else:
                     return SkillResult(content=f"【{tool_name}】调用失败: {result.error}", success=False)

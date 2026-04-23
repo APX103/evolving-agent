@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Observability - Evolving Agent</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .span-row:hover { background-color: #f3f4f6; }
+        .dark .span-row:hover { background-color: #374151; }
+        .trace-row { cursor: pointer; }
+        .trace-row:hover { background-color: #ecfdf5; }
+        .dark .trace-row:hover { background-color: #064e3b; }
+        .tree-line { border-left: 2px solid #d1d5db; padding-left: 1rem; margin-left: 0.5rem; }
+        .dark .tree-line { border-left-color: #4b5563; }
+        pre { white-space: pre-wrap; word-break: break-all; }
+    </style>
+</head>
+<body class="bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 min-h-screen">
+    <div class="max-w-6xl mx-auto p-6">
+        <header class="mb-8 flex items-center justify-between">
+            <div>
+                <h1 class="text-2xl font-bold text-emerald-600 dark:text-emerald-400">🔭 Observability</h1>
+                <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">分布式追踪与性能指标</p>
+            </div>
+            <a href="/" class="text-sm px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition">返回聊天</a>
+        </header>
+
+        <!-- 指标卡片 -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+            <div class="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-gray-700">
+                <div class="text-xs text-gray-500 dark:text-gray-400">总调用 (24h)</div>
+                <div class="text-2xl font-bold mt-1" id="metric-calls">--</div>
+            </div>
+            <div class="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-gray-700">
+                <div class="text-xs text-gray-500 dark:text-gray-400">平均延迟</div>
+                <div class="text-2xl font-bold mt-1" id="metric-latency">--</div>
+                <div class="text-xs text-gray-400">ms</div>
+            </div>
+            <div class="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-gray-700">
+                <div class="text-xs text-gray-500 dark:text-gray-400">总 Token</div>
+                <div class="text-2xl font-bold mt-1" id="metric-tokens">--</div>
+            </div>
+            <div class="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-gray-700">
+                <div class="text-xs text-gray-500 dark:text-gray-400">总成本</div>
+                <div class="text-2xl font-bold mt-1" id="metric-cost">--</div>
+                <div class="text-xs text-gray-400">USD</div>
+            </div>
+        </div>
+
+        <!-- 追踪列表 -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+            <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+                <h2 class="font-semibold">最近追踪</h2>
+                <button onclick="loadTraces()" class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition">刷新</button>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
+                        <tr>
+                            <th class="text-left px-6 py-3 font-medium">Trace ID</th>
+                            <th class="text-left px-6 py-3 font-medium">Root Span</th>
+                            <th class="text-left px-6 py-3 font-medium">Spans</th>
+                            <th class="text-left px-6 py-3 font-medium">Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="traces-table" class="divide-y divide-gray-100 dark:divide-gray-700">
+                        <tr><td colspan="4" class="px-6 py-8 text-center text-gray-400">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Trace 详情弹窗 -->
+        <div id="trace-modal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+            <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-4xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+                <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+                    <h3 class="font-semibold" id="modal-title">Trace 详情</h3>
+                    <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl">&times;</button>
+                </div>
+                <div class="flex-1 overflow-y-auto p-6" id="modal-content">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function loadMetrics() {
+            try {
+                const res = await fetch('/api/metrics');
+                const data = await res.json();
+                document.getElementById('metric-calls').textContent = data.total_calls ?? 0;
+                document.getElementById('metric-latency').textContent = data.avg_latency_ms ?? 0;
+                document.getElementById('metric-tokens').textContent = (data.total_tokens ?? 0).toLocaleString();
+                document.getElementById('metric-cost').textContent = '$' + (data.total_cost_usd ?? 0).toFixed(4);
+            } catch (e) {
+                console.error('加载指标失败:', e);
+            }
+        }
+
+        async function loadTraces() {
+            const tbody = document.getElementById('traces-table');
+            tbody.innerHTML = '<tr><td colspan="4" class="px-6 py-8 text-center text-gray-400">加载中...</td></tr>';
+            try {
+                const res = await fetch('/api/traces?limit=30');
+                const data = await res.json();
+                const traces = data.traces || [];
+                if (traces.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" class="px-6 py-8 text-center text-gray-400">暂无追踪数据</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = traces.map(t => `
+                    <tr class="trace-row border-b border-gray-100 dark:border-gray-700" onclick="showTrace('${t.trace_id}')">
+                        <td class="px-6 py-3 font-mono text-xs text-emerald-600 dark:text-emerald-400">${t.trace_id}</td>
+                        <td class="px-6 py-3">${t.root_name || '-'}</td>
+                        <td class="px-6 py-3">${t.span_count}</td>
+                        <td class="px-6 py-3 text-gray-500 dark:text-gray-400">${formatTime(t.start_time)}</td>
+                    </tr>
+                `).join('');
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="4" class="px-6 py-8 text-center text-red-400">加载失败</td></tr>';
+            }
+        }
+
+        async function showTrace(traceId) {
+            const modal = document.getElementById('trace-modal');
+            const content = document.getElementById('modal-content');
+            document.getElementById('modal-title').textContent = `Trace: ${traceId}`;
+            content.innerHTML = '<div class="text-gray-400">加载中...</div>';
+            modal.classList.remove('hidden');
+            try {
+                const res = await fetch(`/api/traces/${traceId}`);
+                const data = await res.json();
+                const spans = data.spans || [];
+                if (spans.length === 0) {
+                    content.innerHTML = '<div class="text-gray-400">无数据</div>';
+                    return;
+                }
+                const spanMap = Object.fromEntries(spans.map(s => [s.span_id, s]));
+                const roots = spans.filter(s => !s.parent_id || !spanMap[s.parent_id]);
+                content.innerHTML = roots.map(r => renderSpanTree(r, spanMap, 0)).join('');
+            } catch (e) {
+                content.innerHTML = '<div class="text-red-400">加载失败</div>';
+            }
+        }
+
+        function renderSpanTree(span, spanMap, depth) {
+            const children = spanMap ? Object.values(spanMap).filter(s => s.parent_id === span.span_id) : [];
+            const indent = depth > 0 ? 'tree-line' : '';
+            const duration = span.duration_ms ? Math.round(span.duration_ms) + 'ms' : '-';
+            const statusColor = span.status === 'error' ? 'text-red-500' : 'text-green-500';
+            const attrs = span.attributes || {};
+            const attrHtml = Object.entries(attrs).map(([k, v]) => `
+                <span class="inline-block bg-gray-100 dark:bg-gray-700 text-xs px-2 py-0.5 rounded mr-1 mb-1">${k}: ${JSON.stringify(v).slice(0, 60)}</span>
+            `).join('');
+
+            return `
+                <div class="${indent} mb-2">
+                    <div class="span-row rounded-lg p-3 border border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
+                        <div class="flex items-center justify-between mb-1">
+                            <div class="font-medium text-sm">${span.name}</div>
+                            <div class="text-xs text-gray-400 font-mono">${duration}</div>
+                        </div>
+                        <div class="text-xs text-gray-500 mb-1 font-mono">${span.span_id} <span class="${statusColor}">● ${span.status}</span></div>
+                        <div class="flex flex-wrap">${attrHtml}</div>
+                    </div>
+                    ${children.map(c => renderSpanTree(c, spanMap, depth + 1)).join('')}
+                </div>
+            `;
+        }
+
+        function closeModal() {
+            document.getElementById('trace-modal').classList.add('hidden');
+        }
+
+        function formatTime(ts) {
+            if (!ts) return '-';
+            try {
+                const d = new Date(ts * 1000);
+                return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            } catch {
+                return '-';
+            }
+        }
+
+        // 暗黑模式
+        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.classList.add('dark');
+        }
+
+        loadMetrics();
+        loadTraces();
+        setInterval(loadMetrics, 30000);
+    </script>
+</body>
+</html>

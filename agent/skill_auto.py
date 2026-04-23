@@ -7,9 +7,27 @@ import logging
 import os
 import re
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
+
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+
+class SkillOptimizationStep(BaseModel):
+    """Skill 优化步骤 Schema"""
+    order: int
+    tool: str
+    purpose: str
+    notes: str = ""
+
+
+class SkillOptimizationResult(BaseModel):
+    """Skill 优化结果 Schema"""
+    description: str = ""
+    steps: List[SkillOptimizationStep] = Field(default_factory=list)
+    pitfalls: List[str] = Field(default_factory=list)
+    verification: List[str] = Field(default_factory=list)
 
 
 class AutoSkillGenerator:
@@ -213,11 +231,12 @@ class AutoSkillGenerator:
 }}
 """
         try:
-            result = llm_client.quick_chat(prompt, system="你是一个技术文档优化专家")
-            # 简单提取 JSON
-            cleaned = result.strip().strip("`").replace("```json", "").replace("```", "")
-            data = json.loads(cleaned)
-            return data
+            result = llm_client.chat_structured(
+                prompt,
+                response_model=SkillOptimizationResult,
+                system="你是一个技术文档优化专家",
+            )
+            return result.model_dump()
         except Exception:
             return None
 

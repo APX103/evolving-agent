@@ -6,9 +6,10 @@
 - LLM-as-Judge 质量过滤
 - 支持知识图谱三元组
 """
-import json
 from typing import Dict, List, Optional
 from datetime import datetime
+
+from pydantic import TypeAdapter
 
 from agent.llm.base import LLMClient
 from agent.memory import MemoryManager
@@ -344,19 +345,11 @@ class Learner:
             return None
 
     # ── JSON 解析工具 ──
-    def _clean_json(self, text: str) -> str:
-        text = text.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        return text.strip()
-
     def _parse_json_list(self, text: str) -> List[Dict]:
         try:
-            data = json.loads(self._clean_json(text))
-            return data if isinstance(data, list) else []
+            cleaned = LLMClient._clean_json(text)
+            adapter = TypeAdapter(List[ExtractedKnowledgeItem])
+            items = adapter.validate_json(cleaned)
+            return [item.model_dump() for item in items]
         except Exception:
             return []

@@ -3,14 +3,33 @@
 自我批评式反思 + 产出可执行规则写入 ProceduralMemory
 形成真正的"反思-行动"闭环
 """
-import json
 import logging
 from typing import Dict, List, Optional
+
+from pydantic import BaseModel, Field
 
 from agent.llm.base import LLMClient
 from agent.memory_module import MemoryManager
 
 logger = logging.getLogger(__name__)
+
+
+class ProceduralRule(BaseModel):
+    pattern: str = ""
+    action: str = ""
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+
+
+class ReflectionSchema(BaseModel):
+    summary: str = ""
+    strengths: List[str] = []
+    weaknesses: List[str] = []
+    missed_opportunities: List[str] = []
+    user_patterns: str = ""
+    personality_update: str = ""
+    growth_goals: List[str] = []
+    confidence_change: str = ""
+    procedural_rules: List[ProceduralRule] = []
 
 
 # ── 反思 few-shot ──
@@ -144,27 +163,9 @@ class Reflector:
 
     def _parse_reflection(self, response: str) -> Dict:
         try:
-            cleaned = response.strip()
-            if cleaned.startswith("```json"):
-                cleaned = cleaned[7:]
-            if cleaned.startswith("```"):
-                cleaned = cleaned[3:]
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3]
-            cleaned = cleaned.strip()
-
-            data = json.loads(cleaned)
-            return {
-                "summary": data.get("summary", "无总结"),
-                "strengths": data.get("strengths", []),
-                "weaknesses": data.get("weaknesses", []),
-                "missed_opportunities": data.get("missed_opportunities", []),
-                "user_patterns": data.get("user_patterns", ""),
-                "personality_update": data.get("personality_update", ""),
-                "growth_goals": data.get("growth_goals", []),
-                "confidence_change": data.get("confidence_change", ""),
-                "procedural_rules": data.get("procedural_rules", []),
-            }
+            cleaned = LLMClient._clean_json(response)
+            schema = ReflectionSchema.model_validate_json(cleaned)
+            return schema.model_dump()
         except Exception as e:
             return {
                 "summary": f"反思解析失败: {str(e)}",

@@ -7,35 +7,13 @@ import os
 import sys
 import time
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent.executor import Executor
 from agent.plan import Plan, Step, StepStatus
-
-
-class MockLLM:
-    """模拟 LLM，记录调用次数和时间"""
-    def __init__(self, delay: float = 0.1):
-        self.delay = delay
-        self.call_count = 0
-        self.call_times = []
-
-    def quick_chat(self, prompt, system=None):
-        self.call_count += 1
-        t0 = time.time()
-        time.sleep(self.delay)
-        t1 = time.time()
-        self.call_times.append((t0, t1))
-        return f"result_for_{prompt[:20]}"
-
-    async def aquick_chat(self, prompt, system=None):
-        import asyncio
-        self.call_count += 1
-        t0 = time.time()
-        await asyncio.sleep(self.delay)
-        t1 = time.time()
-        self.call_times.append((t0, t1))
-        return f"result_for_{prompt[:20]}"
+from tests.conftest import MockLLM
 
 
 def test_serial_execution():

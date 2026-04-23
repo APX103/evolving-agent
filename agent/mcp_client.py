@@ -4,6 +4,7 @@ MCP (Model Context Protocol) 客户端
 纯异步接口，外部调用方负责提供 running event loop
 """
 import asyncio
+import json
 import logging
 from contextlib import AsyncExitStack
 from typing import Dict, List, Optional, Any
@@ -12,6 +13,7 @@ from dataclasses import dataclass, field
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import TextContent
+from agent.observability import get_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -133,14 +135,25 @@ class MCPClient:
 
     async def call_tool(self, server_name: str, tool_name: str, arguments: Dict) -> MCPCallResult:
         """异步调用指定 MCP tool"""
+        tracer = get_tracer()
+        span = tracer.start_span("mcp.call_tool", attributes={
+            "server_name": server_name,
+            "tool_name": tool_name,
+        })
+        span.set_attribute("arguments", json.dumps(arguments, ensure_ascii=False, default=str)[:500])
+
         session = self._sessions.get(server_name)
         if not session:
+            span.set_attribute("error", "server_not_connected")
+            span.end()
             return MCPCallResult(success=False, content=None, error=f"server '{server_name}' 未连接")
 
         try:
             result = await session.call_tool(tool_name, arguments=arguments)
         except Exception as e:
             logger.warning(f"[MCP] 调用 tool '{tool_name}' 失败: {e}")
+            span.record_exception(e)
+            span.end()
             return MCPCallResult(success=False, content=None, error=str(e))
 
         texts = []
@@ -150,16 +163,21 @@ class MCPClient:
             else:
                 texts.append(str(content))
 
+        result_text = "\n".join(texts) if texts else ""
+        span.set_attribute("result_length", len(result_text))
+        span.set_attribute("is_error", bool(result.isError))
+        span.end()
+
         if result.isError:
             return MCPCallResult(
                 success=False,
-                content="\n".join(texts),
+                content=result_text,
                 error="Tool 返回错误"
             )
 
         return MCPCallResult(
             success=True,
-            content="\n".join(texts) if texts else "",
+            content=result_text,
         )
 
     async def call_tool_by_name(self, tool_name: str, arguments: Dict) -> MCPCallResult:

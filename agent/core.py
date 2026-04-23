@@ -4,6 +4,7 @@ Agent 核心逻辑 (v3.2)
 新增：增量学习、反馈闭环、知识图谱
 """
 import logging
+import os
 import threading
 from typing import Dict, List, Optional
 from datetime import datetime
@@ -57,11 +58,6 @@ class EvolvingAgent:
             base_path=user_storage_base,
         )
         self.learner = Learner(self.llm_client, self.memory)
-        self.reflector = Reflector(
-            self.llm_client,
-            self.memory,
-            procedural_memory=self.procedural_memory,
-        )
 
         self.personality = PersonalityEngine(
             storage_path=os.path.join(user_storage_base, "personality"),
@@ -87,6 +83,12 @@ class EvolvingAgent:
             storage_path=os.path.join(user_storage_base, "procedural_memory"),
             storage=self.storage,
             llm_client=self.llm_client,
+        )
+
+        self.reflector = Reflector(
+            self.llm_client,
+            self.memory,
+            procedural_memory=self.procedural_memory,
         )
 
         # 世界状态（环境认知）

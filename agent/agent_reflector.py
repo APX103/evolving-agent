@@ -2,12 +2,27 @@
 Agent 级独立 Reflector - 每个 Specialist 独立的反思进化
 集成记忆命名空间，支持 Agent 私有反思记录
 """
-import json
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional
 
+from pydantic import BaseModel
+
+from agent.llm.base import LLMClient
+
 logger = logging.getLogger(__name__)
+
+
+class AgentReflectionSchema(BaseModel):
+    agent_name: str = ""
+    summary: str = ""
+    strengths: List[str] = []
+    weaknesses: List[str] = []
+    user_patterns: str = ""
+    improvement_suggestions: List[str] = []
+    skill_gaps: List[str] = []
+    confidence_adjustment: float = 0.0
+    next_goals: List[str] = []
 
 REFLECTION_PROMPT_TEMPLATE = """你是 {agent_name} 的反思导师。请基于最近的交互记录，对 {agent_name} 进行一次深度反思。
 
@@ -161,28 +176,12 @@ class AgentReflector:
     def _parse_reflection(self, response: str, agent_name: str) -> Dict:
         """解析 LLM 输出的反思 JSON"""
         try:
-            cleaned = response.strip()
-            if cleaned.startswith("```json"):
-                cleaned = cleaned[7:]
-            if cleaned.startswith("```"):
-                cleaned = cleaned[3:]
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3]
-            cleaned = cleaned.strip()
-
-            data = json.loads(cleaned)
-            return {
-                "agent_name": data.get("agent_name", agent_name),
-                "summary": data.get("summary", ""),
-                "strengths": data.get("strengths", []),
-                "weaknesses": data.get("weaknesses", []),
-                "user_patterns": data.get("user_patterns", ""),
-                "improvement_suggestions": data.get("improvement_suggestions", []),
-                "skill_gaps": data.get("skill_gaps", []),
-                "confidence_adjustment": data.get("confidence_adjustment", 0.0),
-                "next_goals": data.get("next_goals", []),
-                "reflected_at": datetime.now().isoformat(),
-            }
+            cleaned = LLMClient._clean_json(response)
+            schema = AgentReflectionSchema.model_validate_json(cleaned)
+            result = schema.model_dump()
+            result["agent_name"] = result.get("agent_name") or agent_name
+            result["reflected_at"] = datetime.now().isoformat()
+            return result
         except Exception as e:
             self.logger.warning(f"[AgentReflector] 解析失败: {e}")
             return {

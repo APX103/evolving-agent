@@ -9,18 +9,18 @@ import json
 import time
 import threading
 
+import pytest
+
 # 确保能找到 agent 模块
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from agent.config import Config
-from agent.core import EvolvingAgent
 
 
 def log(msg):
     print(f"[TEST] {msg}")
 
 
-def test_initialization():
+def _test_initialization():
+    from agent.core import EvolvingAgent
     log("=" * 50)
     log("测试 1: Agent 初始化")
     agent = EvolvingAgent("config.yaml")
@@ -32,7 +32,7 @@ def test_initialization():
     return agent
 
 
-def test_skill_calc(agent):
+def _test_skill_calc(agent):
     log("=" * 50)
     log("测试 2: Skill 路由（/calc）")
     response = agent.chat("/calc 123 + 456")
@@ -41,7 +41,7 @@ def test_skill_calc(agent):
     log(f"  ✅ Skill 返回: {response}")
 
 
-def test_skill_echo(agent):
+def _test_skill_echo(agent):
     log("=" * 50)
     log("测试 3: Skill 路由（/echo）")
     response = agent.chat("/echo hello world")
@@ -50,7 +50,7 @@ def test_skill_echo(agent):
     log(f"  ✅ Skill 返回: {response}")
 
 
-def test_stream_chat(agent):
+def _test_stream_chat(agent):
     log("=" * 50)
     log("测试 4: LLM 流式对话")
     response = agent.chat("你好，请用一句话自我介绍")
@@ -65,7 +65,7 @@ def test_stream_chat(agent):
     log(f"  ✅ 内容预览: {full_text[:60]}...")
 
 
-def test_short_term_memory(agent):
+def _test_short_term_memory(agent):
     log("=" * 50)
     log("测试 5: 短期记忆")
     short_term = agent.memory.get_short_term(max_turns=10)
@@ -76,7 +76,7 @@ def test_short_term_memory(agent):
     log(f"  ✅ 短期记忆中有 {len(user_turns)} 条用户消息, {len(assistant_turns)} 条助手消息")
 
 
-def test_signal_learning(agent):
+def _test_signal_learning(agent):
     log("=" * 50)
     log("测试 6: 实时信号学习（请记住 / 我喜欢）")
     kb_before = len(agent.memory.knowledge_base)
@@ -95,7 +95,7 @@ def test_signal_learning(agent):
         log(f"  ⚠️ 知识库未增加（可能是合并或信号未命中，继续观察）")
 
 
-def test_session_end(agent):
+def _test_session_end(agent):
     log("=" * 50)
     log("测试 7: 会话结束与后台学习")
     session_count_before = agent.memory.session_count
@@ -115,7 +115,7 @@ def test_session_end(agent):
         log("  ✅ 后台学习线程已结束或未启动")
 
 
-def test_storage_files():
+def _test_storage_files():
     log("=" * 50)
     log("测试 8: 本地存储文件完整性")
     base = "./storage"
@@ -149,7 +149,8 @@ def test_storage_files():
                 raise
 
 
-def test_concurrent_writes():
+def _test_concurrent_writes():
+    from agent.core import EvolvingAgent
     log("=" * 50)
     log("测试 9: 并发写入安全（模拟快速多轮对话）")
     agent = EvolvingAgent("config.yaml")
@@ -184,7 +185,8 @@ def test_concurrent_writes():
         agent._learning_thread.join(timeout=10)
 
 
-def test_config_singleton():
+def _test_config_singleton():
+    from agent.config import Config
     log("=" * 50)
     log("测试 10: 配置单例")
     cfg1 = Config("config.yaml")
@@ -203,19 +205,29 @@ def main():
     # if os.path.exists("./storage"):
     #     shutil.rmtree("./storage")
 
-    agent = test_initialization()
-    test_skill_calc(agent)
-    test_skill_echo(agent)
-    test_stream_chat(agent)
-    test_short_term_memory(agent)
-    test_signal_learning(agent)
-    test_session_end(agent)
-    test_storage_files()
-    test_concurrent_writes()
-    test_config_singleton()
+    agent = _test_initialization()
+    _test_skill_calc(agent)
+    _test_skill_echo(agent)
+    _test_stream_chat(agent)
+    _test_short_term_memory(agent)
+    _test_signal_learning(agent)
+    _test_session_end(agent)
+    _test_storage_files()
+    _test_concurrent_writes()
+    _test_config_singleton()
 
     log("=" * 50)
     log("🎉 全量集成测试全部通过！")
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_integration_full_stack():
+    """Run the full integration stack against real APIs."""
+    # Lazy import to avoid collection errors when agent.core has import issues
+    from agent.core import EvolvingAgent
+    _ = EvolvingAgent  # silence unused import warning for the closure
+    main()
 
 
 if __name__ == "__main__":

@@ -2,10 +2,11 @@
 多 Agent 基础设施 - 基类与数据模型
 """
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Any, AsyncGenerator
 import logging
+
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -19,34 +20,31 @@ class LayerType(str, Enum):
     RULES = "rules"
 
 
-@dataclass
-class IntentClassification:
+class IntentClassification(BaseModel):
     """意图分类结果"""
     primary_intent: str
     confidence: float
     target_agent: Optional[str]
-    parameters: Dict[str, Any] = field(default_factory=dict)
+    parameters: Dict[str, Any] = Field(default_factory=dict)
     needs_planning: bool = False
 
 
-@dataclass
-class AgentResponse:
+class AgentResponse(BaseModel):
     """Agent 响应"""
     content: str
     agent_name: str
     response_type: str = "text"
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
-@dataclass
-class AgentContext:
+class AgentContext(BaseModel):
     """Agent 上下文 - 分层架构"""
     user_id: str
     source: str
-    layers: Dict[LayerType, str] = field(default_factory=dict)
-    short_term: List[Dict] = field(default_factory=list)
-    working_memory: Dict = field(default_factory=dict)
-    metadata: Dict = field(default_factory=dict)
+    layers: Dict[LayerType, str] = Field(default_factory=dict)
+    short_term: List[Dict] = Field(default_factory=list)
+    working_memory: Dict = Field(default_factory=dict)
+    metadata: Dict = Field(default_factory=dict)
 
     def to_messages(self, system_prompt: str) -> List[Dict[str, str]]:
         """
@@ -77,22 +75,20 @@ class AgentContext:
         return self.layers.get(layer_type, "")
 
 
-@dataclass
-class HandoffRequest:
+class HandoffRequest(BaseModel):
     from_agent: str
     to_agent: str
     user_input: str
     context_summary: str
-    working_memory: Dict
+    working_memory: Dict = Field(default_factory=dict)
     handoff_reason: str
 
 
-@dataclass
-class HandoffResult:
+class HandoffResult(BaseModel):
     from_agent: str
     response: str
-    updated_working_memory: Dict
-    learnings: List[Dict] = field(default_factory=list)
+    updated_working_memory: Dict = Field(default_factory=dict)
+    learnings: List[Dict] = Field(default_factory=list)
 
 
 class BaseAgent(ABC):
@@ -110,6 +106,7 @@ class BaseAgent(ABC):
         self.config = config or {}
         self.working_memory: Dict = {}
         self.logger = logging.getLogger(f"agent.{self.name}")
+        self._perf_mon = get_performance_monitor()
 
     @abstractmethod
     async def process(self, user_input: str, context: AgentContext) -> AgentResponse:
@@ -134,14 +131,38 @@ class BaseAgent(ABC):
     async def _call_llm(self, messages: List[Dict], **kwargs) -> str:
         temperature = kwargs.get("temperature", self.temperature)
         max_tokens = kwargs.get("max_tokens", self.max_tokens)
-        if hasattr(self.llm, "achat"):
-            return await self.llm.achat(messages, temperature=temperature, max_tokens=max_tokens, stream=False)  # type: ignore[return-value]
-        import asyncio
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None,
-            lambda: self.llm.chat(messages, temperature=temperature, max_tokens=max_tokens, stream=False)
-        )
+
+        # 追踪 + 性能监控
+        tracer = get_tracer()
+        span = tracer.start_span(f"agent.{self.name}.call_llm", attributes={"agent": self.name})
+        call_key = None
+        perf_mon = getattr(self, "_perf_mon", None)
+        if perf_mon:
+            call_key = perf_mon.start_call(self.name)
+        success = False
+
+        try:
+            if hasattr(self.llm, "achat"):
+                result = await self.llm.achat(messages, temperature=temperature, max_tokens=max_tokens, stream=False)  # type: ignore[return-value]
+            else:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: self.llm.chat(messages, temperature=temperature, max_tokens=max_tokens, stream=False)
+                )
+            success = True
+            span.set_attribute("success", True)
+            return result  # type: ignore[return-value]
+        except Exception as e:
+            span.record_exception(e)
+            if call_key and perf_mon:
+                perf_mon.end_call(call_key, self.name, success=False, error=str(e))
+            raise
+        finally:
+            span.end()
+            if call_key and perf_mon and success:
+                perf_mon.end_call(call_key, self.name, success=True)
 
     async def _stream_llm(self, messages: List[Dict], **kwargs) -> AsyncGenerator[str, None]:
         temperature = kwargs.get("temperature", self.temperature)

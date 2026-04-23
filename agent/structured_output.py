@@ -8,7 +8,7 @@ from typing import Type, TypeVar, List, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
-from agent.llm.base import LLMClient
+from agent.llm.base import LLMClient, StructuredOutputError
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ T = TypeVar("T", bound=BaseModel)
 class StructuredOutputExtractor:
     """
     Pydantic 强制 LLM 输出指定 Schema
-    使用 OpenAI-compatible JSON mode 或 tool_choice
+    内部使用 chat_structured 接口，保持向后兼容
     """
 
     def __init__(self, llm_client: LLMClient):
@@ -30,14 +30,26 @@ class StructuredOutputExtractor:
         解析失败时返回 None（不抛异常，保持鲁棒性）
         """
         try:
-            raw = self.llm.quick_chat(prompt, system=system)
-            cleaned = self._clean_json(raw)
-            return model_cls.model_validate_json(cleaned)
-        except (ValidationError, json.JSONDecodeError) as e:
-            logger.warning(f"[StructuredOutput] 解析失败: {e}, raw={raw[:200]}")
+            return self.llm.chat_structured(prompt, response_model=model_cls, system=system)
+        except StructuredOutputError as e:
+            logger.warning(f"[StructuredOutput] 解析失败: {e}, raw={e.raw_text[:200]}")
             return None
         except Exception as e:
             logger.warning(f"[StructuredOutput] 提取异常: {e}")
+            return None
+
+    async def aextract(self, model_cls: Type[T], prompt: str, system: str = "") -> Optional[T]:
+        """
+        异步调用 LLM 并强制解析为单个 Pydantic 模型
+        解析失败时返回 None
+        """
+        try:
+            return await self.llm.achat_structured(prompt, response_model=model_cls, system=system)
+        except StructuredOutputError as e:
+            logger.warning(f"[StructuredOutput] 异步解析失败: {e}, raw={e.raw_text[:200]}")
+            return None
+        except Exception as e:
+            logger.warning(f"[StructuredOutput] 异步提取异常: {e}")
             return None
 
     def extract_list(self, model_cls: Type[T], prompt: str, system: str = "") -> List[T]:
@@ -47,7 +59,7 @@ class StructuredOutputExtractor:
         """
         try:
             raw = self.llm.quick_chat(prompt, system=system)
-            cleaned = self._clean_json(raw)
+            cleaned = LLMClient._clean_json(raw)
             data = json.loads(cleaned)
             if not isinstance(data, list):
                 if isinstance(data, dict):
@@ -66,17 +78,32 @@ class StructuredOutputExtractor:
             logger.warning(f"[StructuredOutput] 列表解析失败: {e}, raw={raw[:200] if 'raw' in dir() else 'N/A'}")
             return []
 
-    @staticmethod
-    def _clean_json(text: str) -> str:
-        """清理 markdown 代码块等包裹"""
-        text = text.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        return text.strip()
+    async def aextract_list(self, model_cls: Type[T], prompt: str, system: str = "") -> List[T]:
+        """
+        异步调用 LLM 并强制解析为 Pydantic 模型列表
+        解析失败时返回空列表
+        """
+        try:
+            raw = await self.llm.aquick_chat(prompt, system=system)
+            cleaned = LLMClient._clean_json(raw)
+            data = json.loads(cleaned)
+            if not isinstance(data, list):
+                if isinstance(data, dict):
+                    data = [data]
+                else:
+                    return []
+            results = []
+            for item in data:
+                if isinstance(item, dict):
+                    try:
+                        results.append(model_cls.model_validate(item))
+                    except ValidationError as e:
+                        logger.debug(f"[StructuredOutput] 单条异步验证失败: {e}")
+            return results
+        except (json.JSONDecodeError, Exception) as e:
+            raw_str = raw[:200] if 'raw' in dir() else 'N/A'
+            logger.warning(f"[StructuredOutput] 异步列表解析失败: {e}, raw={raw_str}")
+            return []
 
 
 # ── 通用知识提取模型 ──

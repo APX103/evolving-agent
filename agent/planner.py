@@ -4,9 +4,10 @@
 支持同步 + 异步双模式
 """
 import asyncio
-import json
 import logging
-from typing import Optional
+from typing import Dict, List, Optional, Any
+
+from pydantic import BaseModel, Field
 
 from agent.llm.base import LLMClient
 from agent.structured_output import StructuredOutputExtractor
@@ -35,6 +36,22 @@ PLANNER_SYSTEM_PROMPT = """你是一个任务规划专家。请将用户的请�
 4. 最后一步总是 "总结"，汇总前面所有结果
 
 只输出 JSON，不要解释。"""
+
+
+class StepSchema(BaseModel):
+    """规划步骤 Schema"""
+    id: int
+    description: str
+    tool: str
+    arguments: Dict[str, Any] = Field(default_factory=dict)
+    depends_on: List[int] = Field(default_factory=list)
+
+
+class PlanSchema(BaseModel):
+    """规划结果 Schema"""
+    needs_planning: bool
+    steps: List[StepSchema]
+    reason: str = ""
 
 
 class Planner:
@@ -107,29 +124,30 @@ class Planner:
 - tool 必须是可用工具之一"""
 
         try:
-            raw = await self.llm_client.aquick_chat(prompt, system=PLANNER_SYSTEM_PROMPT)
-            cleaned = raw.strip().strip("`").replace("```json", "").replace("```", "")
-            data = json.loads(cleaned)
+            schema = await self.llm_client.achat_structured(
+                prompt,
+                response_model=PlanSchema,
+                system=PLANNER_SYSTEM_PROMPT,
+            )
 
-            if not data.get("needs_planning", True):
+            if not schema.needs_planning:
                 return None  # 不需要规划，走正常 chat
 
-            steps_data = data.get("steps", [])
             steps = []
-            for s in steps_data:
+            for s in schema.steps:
                 steps.append(Step(
-                    id=s["id"],
-                    description=s.get("description", ""),
-                    tool=s.get("tool", "llm"),
-                    arguments=s.get("arguments", {}),
-                    depends_on=s.get("depends_on", []),
+                    id=s.id,
+                    description=s.description,
+                    tool=s.tool,
+                    arguments=s.arguments,
+                    depends_on=s.depends_on,
                     status=StepStatus.PENDING,
                 ))
 
             return Plan(task=task, steps=steps)
 
-        except (json.JSONDecodeError, KeyError, Exception) as e:
-            raw_str = raw[:200] if 'raw' in dir() else 'N/A'
+        except Exception as e:
+            raw_str = getattr(e, "raw_text", "")[:200] if hasattr(e, "raw_text") else "N/A"
             logger.warning(f"[Planner] 规划失败: {e}, raw={raw_str}")
             return None
 

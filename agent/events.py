@@ -32,3 +32,34 @@ class EventBus:
 
 # 全局默认事件总线（单进程内共享）
 default_bus = EventBus()
+
+
+# ── 自动订阅可观测性事件 ──
+def _auto_subscribe_observability():
+    """将 EventBus 事件桥接到追踪系统"""
+    try:
+        from agent.observability import get_tracer
+
+        def _on_session_started(payload):
+            tracer = get_tracer()
+            span = tracer.start_span("event.session.started", attributes={"payload": payload})
+            span.end()
+
+        def _on_turn_started(payload):
+            tracer = get_tracer()
+            span = tracer.start_span("event.turn.started", attributes={"payload": payload})
+            span.end()
+
+        def _on_skill_executed(payload):
+            tracer = get_tracer()
+            span = tracer.start_span("event.skill.executed", attributes={"payload": payload})
+            span.end()
+
+        default_bus.subscribe("session.started", _on_session_started)
+        default_bus.subscribe("turn.started", _on_turn_started)
+        default_bus.subscribe("skill.executed", _on_skill_executed)
+    except Exception:
+        pass
+
+
+_auto_subscribe_observability()

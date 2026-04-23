@@ -12,6 +12,17 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# 全局单例（延迟初始化）
+_global_perf_monitor: Optional["PerformanceMonitor"] = None
+
+
+def get_performance_monitor() -> "PerformanceMonitor":
+    """获取全局 PerformanceMonitor 单例"""
+    global _global_perf_monitor
+    if _global_perf_monitor is None:
+        _global_perf_monitor = PerformanceMonitor()
+    return _global_perf_monitor
+
 
 @dataclass
 class AgentMetrics:
@@ -122,6 +133,25 @@ class PerformanceMonitor:
             f"[PerfMon] {agent_name}: latency={latency_ms:.0f}ms, "
             f"tokens={tokens_input}+{tokens_output}, success={success}"
         )
+
+        # 若当前在追踪上下文中，附加一个 metric span
+        try:
+            from agent.observability import get_tracer
+            tracer = get_tracer()
+            trace_id = tracer.get_current_trace_id()
+            if trace_id:
+                span = tracer.start_span("perfmon.metric", attributes={
+                    "agent": agent_name,
+                    "latency_ms": round(latency_ms, 2),
+                    "tokens_input": tokens_input,
+                    "tokens_output": tokens_output,
+                    "success": success,
+                })
+                if not success and error:
+                    span.set_attribute("error", error)
+                span.end()
+        except Exception:
+            pass
 
     def record_token_usage(self, agent_name: str, tokens_input: int, tokens_output: int):
         """单独记录 token 使用量（如果 end_call 时未提供）"""

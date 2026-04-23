@@ -7,6 +7,8 @@
 import re
 from typing import Dict, List, Optional
 
+from pydantic import BaseModel, Field
+
 from agent.events import EventBus, default_bus
 from agent.llm.base import LLMClient
 from agent.memory import MemoryManager
@@ -14,6 +16,16 @@ from agent.quality_judge import QualityJudge
 from agent.semantic_detector import SemanticSignalDetector
 from agent.knowledge_graph import Triple
 from agent.structured_output import ExtractedKnowledgeItem, StructuredOutputExtractor
+
+
+class SignalParseResult(BaseModel):
+    content: str = ""
+    category: str = ""
+    subject: str = "用户"
+    predicate: str = "知道"
+    object: str = ""
+    temporal_state: str = "current"
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
 
 
 # ── 保留正则作为 fallback ──
@@ -292,15 +304,13 @@ class SignalLearner:
 
     def _try_parse_structured(self, text: str, default_category: str) -> Dict:
         """尝试解析结构化 JSON"""
-        import json
         try:
-            data = json.loads(text)
-            if isinstance(data, dict):
-                data["category"] = default_category
-                return data
+            result = SignalParseResult.model_validate_json(text)
+            data = result.model_dump()
+            data["category"] = default_category
+            return data
         except Exception:
-            pass
-        return {"content": text, "category": default_category}
+            return {"content": text, "category": default_category}
 
     def _item_to_triple(self, item: Dict, source: str) -> Optional[Triple]:
         """把结构化 item 转为 Triple"""
