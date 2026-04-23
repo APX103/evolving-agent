@@ -144,11 +144,9 @@ class TestTierSelection:
         result = mock_router.chat([{"role": "user", "content": "写代码"}])
         assert result == "result_from_heavy"
 
-    def test_async_chat_auto_routing(self, mock_router):
-        import asyncio
-        result = asyncio.get_event_loop().run_until_complete(
-            mock_router.achat([{"role": "user", "content": "hello"}])
-        )
+    @pytest.mark.asyncio
+    async def test_async_chat_auto_routing(self, mock_router):
+        result = await mock_router.achat([{"role": "user", "content": "hello"}])
         assert result == "aresult_from_lightweight"
 
 
@@ -191,7 +189,8 @@ class TestFallback:
         with pytest.raises(RuntimeError, match="All model tiers failed"):
             router.quick_chat("test")
 
-    def test_async_fallback(self):
+    @pytest.mark.asyncio
+    async def test_async_fallback(self):
         clients = {
             "lightweight": MockLLMClient("lightweight", should_fail=True),
             "standard": MockLLMClient("standard"),
@@ -200,11 +199,7 @@ class TestFallback:
         router = ModelRouter(clients=clients)
         router.default_tier = "lightweight"
 
-        async def _test():
-            return await router.aquick_chat("prompt")
-
-        import asyncio
-        result = asyncio.get_event_loop().run_until_complete(_test())
+        result = await router.aquick_chat("prompt")
         assert result == "aresult_from_standard"
 
     def test_stream_no_fallback(self):
