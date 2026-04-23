@@ -1,7 +1,7 @@
 .vscode
 .venv
 
-storage
+/storage/
 
 config.yaml
 
