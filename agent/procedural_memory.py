@@ -1,12 +1,15 @@
 """
 程序记忆 (Procedural Memory)
 记录从交互中学习到的有效行为策略，自动注入 system prompt
+支持关键词匹配 + 向量语义检索 hybrid 召回
 """
 import json
 import logging
 import os
 from datetime import datetime
 from typing import Dict, List, Optional
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -55,13 +58,17 @@ class ProceduralMemory:
     CONFIDENCE_THRESHOLD = 0.7
     MAX_RULES_IN_PROMPT = 5
 
-    def __init__(self, storage_path: str, storage=None):
+    def __init__(self, storage_path: str, storage=None, llm_client=None):
         from agent.storage.local_json import LocalJsonStorage
         self.storage = storage or LocalJsonStorage()
         self.storage_path = storage_path
         self.storage.ensure_dir(self.storage_path)
+        self.llm_client = llm_client
+        self._embedding_available = llm_client is not None
+        self._vectors: Optional[np.ndarray] = None
         self._rules: List[ProceduralRule] = []
         self._load()
+        self._build_vectors()
 
     # ── 持久化 ──
 
@@ -111,27 +118,69 @@ class ProceduralMemory:
 
     # ── 检索 ──
 
+    def _build_vectors(self):
+        """为所有规则构建向量索引"""
+        if not self._embedding_available or not self._rules:
+            self._vectors = None
+            return
+        try:
+            texts = [f"{r.pattern} {r.action}" for r in self._rules]
+            self._vectors = self.llm_client.embed(texts)
+        except Exception as e:
+            logger.debug(f"[ProceduralMemory] 向量构建失败: {e}")
+            self._vectors = None
+
+    def _rebuild_vector_for(self, rule: ProceduralRule):
+        """为单条规则重建向量"""
+        if not self._embedding_available:
+            return
+        self._build_vectors()
+
     def get_relevant_rules(self, query: str, top_k: int = 5) -> List[ProceduralRule]:
-        """基于关键词匹配检索相关规则，按置信度排序"""
+        """
+        Hybrid 检索：关键词匹配 + 向量语义检索
+        综合评分后返回最相关的规则
+        """
+        if not self._rules:
+            return []
+
         query_lower = query.lower()
-        scored = []
-        for rule in self._rules:
+        keyword_scores: Dict[int, float] = {}
+
+        # 1. 关键词匹配评分
+        for i, rule in enumerate(self._rules):
             score = 0.0
-            # 简单关键词匹配评分
             if rule.pattern.lower() in query_lower or query_lower in rule.pattern.lower():
                 score += 2.0
             if rule.action.lower() in query_lower or query_lower in rule.action.lower():
                 score += 1.0
-            # 共享词汇
             query_words = set(query_lower.split())
             pattern_words = set(rule.pattern.lower().split())
             action_words = set(rule.action.lower().split())
             overlap = len(query_words & pattern_words) + len(query_words & action_words)
             score += overlap * 0.5
-            # 加权置信度和使用频次
             score += rule.confidence * 1.5 + min(rule.usage_count, 10) * 0.1
             if score > 0:
-                scored.append((score, rule))
+                keyword_scores[i] = score
+
+        # 2. 向量语义检索（如果有 LLM client）
+        vector_scores: Dict[int, float] = {}
+        if self._embedding_available and self._vectors is not None and len(self._vectors) == len(self._rules):
+            try:
+                query_vec = self.llm_client.embed(query)
+                sims = self.llm_client.cosine_similarity(query_vec[0], self._vectors)
+                for i, sim in enumerate(sims):
+                    if sim > 0.5:
+                        vector_scores[i] = float(sim) * 3.0  # 向量匹配权重
+            except Exception as e:
+                logger.debug(f"[ProceduralMemory] 向量检索失败: {e}")
+
+        # 3. 综合评分
+        all_indices = set(keyword_scores.keys()) | set(vector_scores.keys())
+        scored = []
+        for idx in all_indices:
+            total = keyword_scores.get(idx, 0) + vector_scores.get(idx, 0)
+            scored.append((total, self._rules[idx]))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         return [r for _, r in scored[:top_k]]

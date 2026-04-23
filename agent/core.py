@@ -81,6 +81,7 @@ class EvolvingAgent:
         self.procedural_memory = ProceduralMemory(
             storage_path=os.path.join(user_storage_base, "procedural_memory"),
             storage=self.storage,
+            llm_client=self.llm_client,
         )
 
         # 审批管理器

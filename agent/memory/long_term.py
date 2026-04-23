@@ -1,8 +1,7 @@
 """
-分层记忆系统 v3.0
-支持向量语义检索 + 知识去重合并 + 记忆老化 + 知识图谱
+长期知识库 Store
+知识条目的存储、去重合并、向量索引、语义搜索
 """
-import json
 import logging
 import os
 from datetime import datetime, timedelta
@@ -10,87 +9,41 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from agent.config import Config
+from agent.memory.base import MemoryStore
 
 logger = logging.getLogger(__name__)
-from agent.llm.base import LLMClient
-from agent.storage.base import StorageBackend
-from agent.storage.local_json import LocalJsonStorage
-from agent.knowledge_graph import KnowledgeGraph
-from agent.context_compressor import ContextCompressor
 
 
-class MemoryManager:
+class LongTermStore(MemoryStore):
     """
-    三层记忆管理 + 向量索引 + 知识图谱
-    - 短期记忆：当前会话
-    - 工作记忆：本次关键点
-    - 长期记忆：知识库（向量索引 + 语义搜索 + 去重合并 + 知识图谱）
+    长期记忆：知识库 + 向量索引
+    - 去重合并
+    - 向量语义搜索
+    - 记忆老化清理
     """
 
     def __init__(
         self,
-        config: Optional[Config] = None,
-        storage: Optional[StorageBackend] = None,
-        llm_client: Optional[LLMClient] = None,
-        base_path: Optional[str] = None,
+        storage=None,
+        knowledge_path: str = "./storage/knowledge",
+        llm_client=None,
     ):
-        cfg = config or Config()
-        self.config = cfg
-        storage_cfg = cfg.storage
-
-        self.storage = storage or LocalJsonStorage()
-
-        self.base_path = base_path or storage_cfg.get("base_path", "./storage")
-        self.conv_path = storage_cfg.get("conversations", os.path.join(self.base_path, "conversations"))
-        self.knowledge_path = storage_cfg.get("knowledge", os.path.join(self.base_path, "knowledge"))
-        self.profile_path = storage_cfg.get("user_profile", os.path.join(self.base_path, "user_profile"))
-        self.reflection_path = storage_cfg.get("reflections", os.path.join(self.base_path, "reflections"))
-
-        for p in [self.conv_path, self.knowledge_path, self.profile_path, self.reflection_path]:
-            self.storage.ensure_dir(p)
-
-        # LLM 客户端
+        super().__init__(storage)
+        self.knowledge_path = self.storage.ensure_dir(knowledge_path)
         self.llm_client = llm_client
-        self._embedding_available = self.llm_client is not None
+        self._embedding_available = llm_client is not None
 
-        # 向量索引路径
         self.vector_path = os.path.join(self.knowledge_path, "vectors.npy")
         self.vector_meta_path = os.path.join(self.knowledge_path, "vectors_meta.json")
 
-        # 内存中的当前会话状态
-        self.short_term: List[Dict[str, Any]] = []
-        self.working_memory: Dict[str, Any] = {}
-        self.session_id: str = self._new_session_id()
-
-        # 加载长期记忆
         self.knowledge_base = self.storage.load_json("knowledge_base.json", self.knowledge_path, default=[])
-        self.user_profile = self.storage.load_json("user_profile.json", self.profile_path, default={})
-        self.reflections = self.storage.load_json("reflections.json", self.reflection_path, default=[])
-        self.session_count = self.user_profile.get("session_count", 0)
-
-        # 知识图谱
-        self.knowledge_graph = KnowledgeGraph(
-            storage_path=os.path.join(self.knowledge_path, "graph")
-        )
-
-        # 加载或构建向量索引
         self._vectors = self._load_vectors()
         if self._vectors is None and self.knowledge_base:
-            logger.info(f"[Memory] 检测到 {len(self.knowledge_base)} 条知识，重建向量索引...")
+            logger.info(f"[LongTermStore] 检测到 {len(self.knowledge_base)} 条知识，重建向量索引...")
             self._build_all_vectors()
 
-        # 上下文压缩器
-        max_turns = self.config.agent.get("max_short_term_turns", 10)
-        self.context_compressor = ContextCompressor(
-            llm_client=self.llm_client,
-            max_turns=max_turns,
-        )
+    # ── 向量索引 ──
 
-    def _new_session_id(self) -> str:
-        return datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    # ── 向量索引管理 ──
     def _load_vectors(self) -> Optional[np.ndarray]:
         if os.path.exists(self.vector_path) and os.path.exists(self.vector_meta_path):
             try:
@@ -99,9 +52,9 @@ class MemoryManager:
                 if len(meta) == len(self.knowledge_base) == len(vecs):
                     return vecs
                 else:
-                    logger.info(f"[Memory] 向量索引长度不一致，重建中...")
+                    logger.info("[LongTermStore] 向量索引长度不一致，重建中...")
             except Exception as e:
-                logger.info(f"[Memory] 加载向量失败: {e}")
+                logger.info(f"[LongTermStore] 加载向量失败: {e}")
         return None
 
     def _save_vectors(self):
@@ -118,9 +71,9 @@ class MemoryManager:
         try:
             self._vectors = self.llm_client.embed(texts)
             self._save_vectors()
-            logger.info(f"[Memory] 向量索引重建完成: {len(texts)} 条")
+            logger.info(f"[LongTermStore] 向量索引重建完成: {len(texts)} 条")
         except Exception as e:
-            logger.info(f"[Memory] 向量重建失败: {e}")
+            logger.info(f"[LongTermStore] 向量重建失败: {e}")
             self._vectors = None
 
     def _append_vector(self, text: str):
@@ -134,7 +87,7 @@ class MemoryManager:
                 self._vectors = np.vstack([self._vectors, vec])
             self._save_vectors()
         except Exception as e:
-            logger.info(f"[Memory] 追加向量失败: {e}")
+            logger.info(f"[LongTermStore] 追加向量失败: {e}")
 
     def _rebuild_vector_for(self, item: Dict[str, Any]):
         if not self._embedding_available or self._vectors is None:
@@ -151,45 +104,15 @@ class MemoryManager:
             self._vectors[idx] = vec[0]
             self._save_vectors()
         except Exception as e:
-            logger.info(f"[Memory] 单条向量重建失败: {e}")
+            logger.info(f"[LongTermStore] 单条向量重建失败: {e}")
 
-    # ── 短期记忆 ──
-    def add_turn(self, role: str, content: str):
-        turn = {
-            "role": role,
-            "content": content,
-            "timestamp": datetime.now().isoformat()
-        }
-        self.short_term.append(turn)
+    # ── 知识管理 ──
 
-    def get_short_term(self, max_turns: int = 10) -> List[Dict[str, Any]]:
-        return self.short_term[-max_turns:]
-
-    def get_context_messages(self, system_prompt: str, max_turns: int = 10, compress: bool = True) -> List[Dict[str, str]]:
-        if compress and self.context_compressor:
-            return self.context_compressor.get_full_compressed_context(system_prompt, self.short_term)
-        messages = [{"role": "system", "content": system_prompt}]
-        messages.extend(self.get_short_term(max_turns))
-        return messages
-
-    # ── 工作记忆 ──
-    def set_working(self, key: str, value: Any):
-        self.working_memory[key] = {
-            "value": value,
-            "timestamp": datetime.now().isoformat()
-        }
-
-    def get_working(self, key: str) -> Optional[Any]:
-        entry = self.working_memory.get(key)
-        return entry["value"] if entry else None
-
-    # ── 长期记忆（核心：去重合并 + 向量索引 + 知识图谱） ──
     def add_knowledge(self, category: str, content: str, source: str = "") -> Dict[str, str]:
         content = content.strip()
         if not content:
             return {"action": "skipped", "id": ""}
 
-        # 1. 去重检查
         duplicate = self._find_duplicate(content)
         if duplicate:
             merged_content = self._merge_content(duplicate["content"], content)
@@ -201,7 +124,6 @@ class MemoryManager:
             self._rebuild_vector_for(duplicate)
             return {"action": "merged", "id": duplicate["id"]}
 
-        # 2. 新增知识
         item = {
             "id": f"k_{datetime.now().strftime('%Y%m%d%H%M%S')}_{len(self.knowledge_base)}",
             "category": category,
@@ -222,7 +144,6 @@ class MemoryManager:
         for item in self.knowledge_base:
             if content_lower == item["content"].lower():
                 return item
-            # 子串匹配：双方内容均需 ≥10 字符，避免短文本过度匹配
             min_len = 10
             if len(content) >= min_len and len(item["content"]) >= min_len:
                 if content_lower in item["content"].lower() or item["content"].lower() in content_lower:
@@ -274,7 +195,7 @@ class MemoryManager:
                     updated_any = True
                     results.append({**item, "_similarity": round(sim, 3)})
             except Exception as e:
-                logger.info(f"[Memory] 向量搜索失败: {e}")
+                logger.info(f"[LongTermStore] 向量搜索失败: {e}")
 
         if len(results) < limit // 2 and query:
             for item in self.knowledge_base:
@@ -301,29 +222,6 @@ class MemoryManager:
         results.sort(key=lambda x: x["_similarity"], reverse=True)
         return results[:limit]
 
-    def update_profile(self, key: str, value: Any):
-        if "data" not in self.user_profile:
-            self.user_profile["data"] = {}
-        self.user_profile["data"][key] = {
-            "value": value,
-            "updated_at": datetime.now().isoformat()
-        }
-        self.user_profile["session_count"] = self.session_count
-        self.storage.save_json(self.user_profile, "user_profile.json", self.profile_path)
-
-    def get_profile(self, key: str = "") -> Any:
-        data = self.user_profile.get("data", {})
-        if key:
-            entry = data.get(key)
-            return entry["value"] if entry else None
-        return {k: v["value"] for k, v in data.items()}
-
-    def add_reflection(self, reflection: Dict[str, Any]):
-        reflection["created_at"] = datetime.now().isoformat()
-        self.reflections.append(reflection)
-        self.storage.save_json(self.reflections, "reflections.json", self.reflection_path)
-
-    # ── 记忆老化与清理 ──
     def cleanup_stale_knowledge(self, days: int = 60, min_access: int = 1) -> int:
         cutoff = datetime.now() - timedelta(days=days)
         cutoff_iso = cutoff.isoformat()
@@ -353,63 +251,5 @@ class MemoryManager:
                 else:
                     self._vectors = self._vectors[kept_indices]
                 self._save_vectors()
-            logger.info(f"[Memory] 清理 {removed} 条陈旧知识，剩余 {len(kept)} 条")
+            logger.info(f"[LongTermStore] 清理 {removed} 条陈旧知识，剩余 {len(kept)} 条")
         return removed
-
-    # ── 会话管理 ──
-    def end_session(self):
-        if not self.short_term:
-            return
-        session_data = {
-            "session_id": self.session_id,
-            "started_at": self.short_term[0]["timestamp"],
-            "ended_at": datetime.now().isoformat(),
-            "turn_count": len(self.short_term),
-            "messages": self.short_term,
-            "working_memory": self.working_memory
-        }
-        filepath = os.path.join(self.conv_path, f"session_{self.session_id}.json")
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(session_data, f, ensure_ascii=False, indent=2)
-
-        self.session_count += 1
-        self.user_profile["session_count"] = self.session_count
-        self.storage.save_json(self.user_profile, "user_profile.json", self.profile_path)
-        self.short_term = []
-        self.working_memory = {}
-
-    def get_relevant_context(self, query_hint: str = "", limit: int = 5) -> str:
-        parts = []
-
-        # 用户画像
-        profile = self.get_profile()
-        if profile:
-            parts.append("【关于用户】")
-            for k, v in list(profile.items())[:5]:
-                parts.append(f"- {k}: {v}")
-
-        # 知识图谱上下文
-        if self.knowledge_graph:
-            kg_context = self.knowledge_graph.to_context_string(subject="用户", limit=5)
-            if kg_context:
-                parts.append(f"\n{kg_context}")
-
-        # 语义召回知识
-        if query_hint:
-            relevant = self.search_knowledge(query=query_hint, limit=limit)
-        else:
-            relevant = self.search_knowledge(category="", limit=limit)
-
-        if relevant:
-            parts.append("\n【我记住的相关知识】")
-            for item in relevant:
-                sim_tag = f"(相关度{item['_similarity']})" if item.get("_similarity", 0) > 0 else ""
-                parts.append(f"- [{item['category']}] {item['content']} {sim_tag}".strip())
-
-        # 最近反思
-        recent_reflections = self.reflections[-3:] if self.reflections else []
-        if recent_reflections:
-            last = recent_reflections[-1]
-            parts.append(f"\n【我的自我认知】{last.get('summary', '')}")
-
-        return "\n".join(parts) if parts else ""
