@@ -49,7 +49,7 @@ class LongTermStore(MemoryStore):
             try:
                 vecs = np.load(self.vector_path)
                 meta = self.storage.load_json("vectors_meta.json", self.knowledge_path, default=[])
-                if len(meta) == len(self.knowledge_base) == len(vecs):
+                if len(meta) == len(self.knowledge_base) and len(meta) == len(vecs):
                     return vecs
                 else:
                     logger.info("[LongTermStore] 向量索引长度不一致，重建中...")

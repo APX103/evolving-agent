@@ -100,6 +100,7 @@ class EvolvingAgent:
             mcp_client=self.mcp_client,
             base_path=user_storage_base,
         )
+        self.world_state.refresh_tool_status()
 
         # 审批管理器
         approval_cfg = self.config.raw.get("approval", {})
@@ -124,6 +125,7 @@ class EvolvingAgent:
         self._learning_thread: Optional[threading.Thread] = None
         self._learning_logs: List[str] = []
         self._log_lock = threading.Lock()
+        self._thread_lock = threading.Lock()
 
         self.event_bus = default_bus
 
@@ -222,8 +224,11 @@ class EvolvingAgent:
         return "\n".join(parts)
 
     def start_session(self):
-        if self._learning_thread and self._learning_thread.is_alive():
-            self._learning_thread.join(timeout=60)
+        with self._thread_lock:
+            thread = self._learning_thread
+        if thread and thread.is_alive():
+            thread.join(timeout=60)
+        with self._thread_lock:
             self._learning_thread = None
 
         self.session_active = True
@@ -307,8 +312,8 @@ class EvolvingAgent:
                     self.memory.add_turn("assistant", response)
                     try:
                         self.signal_learner.on_turn_complete(user_input, response)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"[SignalLearner] Turn complete error: {e}")
 
                     # 如果是流式调用方，需要包装为生成器
                     def _plan_generator(text):
@@ -343,8 +348,8 @@ class EvolvingAgent:
                 self.memory.add_turn("assistant", response)
                 try:
                     self.signal_learner.on_turn_complete(user_input, response)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"[SignalLearner] Turn complete error: {e}")
 
                 return response
 
@@ -407,7 +412,8 @@ class EvolvingAgent:
         finally:
             with self._log_lock:
                 self._learning_logs.append(log_msg)
-            self._learning_thread = None
+            with self._thread_lock:
+                self._learning_thread = None
 
     def end_session(self) -> Optional[Dict]:
         if not self.session_active:
@@ -432,6 +438,10 @@ class EvolvingAgent:
                 "mood": self.mood.state,
                 "relationship": self.relationship.get_summary(),
                 "knowledge_count": len(self.memory.knowledge_base),
+                "knowledge_base": self.memory.knowledge_base[:50],
+                "short_term": self.memory.get_short_term(5),
+                "working_memory": dict(self.memory.working_memory),
+                "procedural_memory": [r.to_dict() for r in self.procedural_memory.list_rules()],
             })
             logger.info(f"  [Checkpoint 已保存: {cp_id}]")
         except Exception as e:
@@ -439,20 +449,23 @@ class EvolvingAgent:
 
         logger.info(f"\n💾 会话已保存。累计进行了 {self.memory.session_count} 次会话。")
 
-        if self._learning_thread and self._learning_thread.is_alive():
+        with self._thread_lock:
+            thread = self._learning_thread
+        if thread and thread.is_alive():
             logger.info("⏳ 等上一轮复盘结束...")
-            self._learning_thread.join(timeout=30)
+            thread.join(timeout=30)
 
-        if self.agent_cfg.get("learn_after_session", True) and messages:
-            logger.info("📚 复盘学习在后台进行，你可以继续聊...")
-            self._learning_thread = threading.Thread(
-                target=self._background_learn,
-                args=(messages,),
-                daemon=True
-            )
-            self._learning_thread.start()
-        else:
-            logger.info("")
+        with self._thread_lock:
+            if self.agent_cfg.get("learn_after_session", True) and messages:
+                logger.info("📚 复盘学习在后台进行，你可以继续聊...")
+                self._learning_thread = threading.Thread(
+                    target=self._background_learn,
+                    args=(messages,),
+                    daemon=True
+                )
+                self._learning_thread.start()
+            else:
+                logger.info("")
 
         self.event_bus.publish("session.ended", {"session_count": self.memory.session_count})
         return {}
@@ -503,8 +516,8 @@ class EvolvingAgent:
                 for log in logs:
                     if log["signal"] not in ("feedback", "auto_verbosity_down", "auto_verbosity_up"):
                         logger.info(f"\n  [实时学习: {log['signal']} → {log['result']}]")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[SignalLearner] Turn complete error: {e}")
 
         # ── 增量学习（每轮都学，不用等 /bye） ──
         try:
@@ -533,8 +546,8 @@ class EvolvingAgent:
             if feedback_type == "correction":
                 correction = user_input
             self.procedural_memory.learn_from_feedback(user_input, response, feedback_type, correction)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[ProceduralMemory] Learn from feedback error: {e}")
 
         if feedback_type == "positive":
             # 召回与本轮对话相关的知识，提升 confidence
@@ -568,8 +581,8 @@ class EvolvingAgent:
                     content=f"用户纠正: {user_input} (原回复: {response[:100]})",
                     source="user_correction"
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"[Memory] Add knowledge error: {e}")
 
     def get_stats(self) -> Dict:
         kg_stats = {}

@@ -110,7 +110,15 @@ class Graph:
         failed: Set[str] = set()
         retry_attempts: Dict[str, int] = {}
 
+        max_iterations = len(self.nodes) * 2
+        iter_count = 0
         while len(executed) + len(failed) < len(self.nodes):
+            iter_count += 1
+            if iter_count > max_iterations:
+                raise RuntimeError(
+                    f"Graph execution exceeded max iterations: possible infinite loop or deadlock in {self.name}"
+                )
+
             ready = [
                 name for name in self.nodes
                 if name not in executed and name not in failed
@@ -123,9 +131,16 @@ class Graph:
                     if name not in executed and name not in failed
                 ]
                 if unresolved:
-                    logger.error(
-                        f"[Graph:{self.name}] deadlock / unsatisfied dependencies: {unresolved}"
-                    )
+                    # If no nodes have ever been executed or failed, it's a true deadlock
+                    if not executed and not failed:
+                        logger.error(
+                            f"[Graph:{self.name}] deadlock / unsatisfied dependencies: {unresolved}"
+                        )
+                        raise RuntimeError(
+                            f"Graph deadlock detected in {self.name}: unresolved nodes {unresolved}"
+                        )
+                    # Otherwise, remaining nodes are skipped (conditional false) or
+                    # downstream of failures — mark them as failed
                     for name in unresolved:
                         failed.add(name)
                         state.setdefault("__errors", []).append(

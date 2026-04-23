@@ -3,6 +3,7 @@ Human-in-the-Loop 敏感操作审批
 支持 CLI 阻塞模式、非阻塞模式和自动审批模式
 """
 import logging
+import time
 import uuid
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
@@ -25,6 +26,7 @@ class ApprovalRequest:
     details: Dict
     request_id: str
     state: ApprovalState = ApprovalState.PENDING
+    created_at: float = field(default_factory=time.time)
 
 
 @dataclass
@@ -60,6 +62,7 @@ class ApprovalManager:
         self.sensitive_actions = set(self.DEFAULT_SENSITIVE_ACTIONS)
         self._pending: Dict[str, ApprovalRequest] = {}
         self._auto_approve = False
+        self.max_pending: int = 100
 
         if config:
             self.enabled = config.get("enabled", True)
@@ -89,12 +92,21 @@ class ApprovalManager:
         if not self.requires_approval(action_type):
             return ApprovalResult(approved=True)
 
+        self._cleanup_expired()
+
         req = ApprovalRequest(
             action_type=action_type,
             description=description,
             details=details,
-            request_id=str(uuid.uuid4())[:8],
+            request_id=str(uuid.uuid4()),
         )
+
+        # 限制 pending 队列长度
+        if len(self._pending) >= self.max_pending:
+            # 移除最早的请求
+            oldest_id = min(self._pending, key=lambda k: self._pending[k].created_at)
+            del self._pending[oldest_id]
+
         self._pending[req.request_id] = req
 
         if self.mode == "auto" or self._auto_approve:
@@ -141,6 +153,16 @@ class ApprovalManager:
     def get_pending_by_id(self, request_id: str) -> Optional[ApprovalRequest]:
         """获取指定待审批请求"""
         return self._pending.get(request_id)
+
+    def _cleanup_expired(self) -> None:
+        """清理超过 1 小时的 pending 请求"""
+        now = time.time()
+        expired_ids = [
+            req_id for req_id, req in self._pending.items()
+            if now - req.created_at > 3600
+        ]
+        for req_id in expired_ids:
+            del self._pending[req_id]
 
     def approve(self, request_id: str) -> ApprovalResult:
         """外部批准请求（Web 模式）"""

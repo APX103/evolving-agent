@@ -12,6 +12,8 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, Optional
 
+from simpleeval import SimpleEval
+
 from agent.llm.base import LLMClient
 from agent.plan import Plan, Step, StepStatus
 from agent.mcp_client import MCPClient
@@ -186,13 +188,14 @@ class Executor:
         return _node_func
 
     def _eval_condition(self, condition: str, state: Dict) -> bool:
-        """Evaluate a simple condition string against state"""
+        """Evaluate a simple condition string against state using safe evaluator"""
         try:
-            result = eval(condition, {"__builtins__": {}}, state)
+            evaluator = SimpleEval(names=state, functions={})
+            result = evaluator.eval(condition)
             return bool(result)
         except Exception as e:
             logger.warning(f"[Executor] Condition eval error '{condition}': {e}")
-            return True
+            return False
 
     # -- 异步工具调用 --
 

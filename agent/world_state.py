@@ -32,8 +32,11 @@ class WorldState:
     def refresh_tool_status(self):
         """刷新 MCP 工具可用性"""
         if self.mcp_client:
-            tools = self.mcp_client.list_tools()
-            self._tool_status = {t.name: True for t in tools}
+            try:
+                tools = self.mcp_client.list_tools()
+                self._tool_status = {t.name: True for t in tools}
+            except Exception:
+                self._tool_status = {}
         else:
             self._tool_status = {}
         self._last_updated = datetime.now().isoformat()

@@ -21,6 +21,9 @@ def setup_logging():
     log_dir = "./storage/logs"
     os.makedirs(log_dir, exist_ok=True)
 
+    log_level = Config().get("log_level", "INFO")
+    level = getattr(logging, log_level.upper(), logging.INFO)
+
     formatter = logging.Formatter(
         "%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         datefmt="%H:%M:%S"
@@ -32,15 +35,15 @@ def setup_logging():
         encoding="utf-8"
     )
     file_handler.setFormatter(formatter)
-    file_handler.setLevel(logging.DEBUG)
+    file_handler.setLevel(level)
 
     # 控制台 handler
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(level)
 
     root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
+    root.setLevel(level)
     root.addHandler(file_handler)
     root.addHandler(console_handler)
 

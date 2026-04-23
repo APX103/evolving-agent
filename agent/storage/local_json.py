@@ -2,6 +2,7 @@
 本地 JSON 文件存储实现
 原子写入（.tmp → os.replace），自动保留 .bak 备份
 """
+import fcntl
 import json
 import os
 import shutil
@@ -16,6 +17,7 @@ class LocalJsonStorage(StorageBackend):
     - 原子写入：先写 .tmp，再用 os.replace 替换
     - 自动备份：旧文件保留为 .bak
     - 目录自动创建
+    - 文件锁防止并发写入竞争
     """
 
     def ensure_dir(self, path: str) -> str:
@@ -49,16 +51,32 @@ class LocalJsonStorage(StorageBackend):
         filepath = os.path.join(directory, filename)
         tmp_path = filepath + ".tmp"
         bak_path = filepath + ".bak"
+        lock_path = filepath + ".lock"
 
-        # 写入临时文件
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
+        lock_file = None
+        try:
+            lock_file = open(lock_path, "w")
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
 
-        # 已有文件则备份
-        if os.path.exists(filepath):
-            shutil.copy2(filepath, bak_path)
+            # 写入临时文件
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
 
-        # 原子替换
-        os.replace(tmp_path, filepath)
+            # 已有文件则备份
+            if os.path.exists(filepath):
+                shutil.copy2(filepath, bak_path)
+
+            # 原子替换
+            os.replace(tmp_path, filepath)
+        finally:
+            if lock_file:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                lock_file.close()
+            # 清理临时文件
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass

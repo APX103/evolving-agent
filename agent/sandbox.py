@@ -7,6 +7,7 @@
 
 自动降级策略：Docker → SafePythonExecutor → simpleeval
 """
+import ast
 import io
 import logging
 import subprocess
@@ -127,12 +128,65 @@ class SafePythonExecutor:
             sys.stdout = old_stdout
 
     def _security_check(self, code: str) -> Dict[str, Any]:
-        """静态安全扫描"""
-        # 检查危险名称
-        for name in _DANGEROUS_NAMES:
-            if name in code:
-                return {"safe": False, "reason": f"代码包含禁止使用的名称 '{name}'"}
+        """AST-based static security scan"""
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as e:
+            return {"safe": False, "reason": f"Syntax error: {e}"}
+
+        dangerous = _DANGEROUS_NAMES
+
+        for node in ast.walk(tree):
+            # Block imports
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                return {"safe": False, "reason": "Import statements are not allowed"}
+
+            # Block dangerous names
+            if isinstance(node, ast.Name) and node.id in dangerous:
+                return {"safe": False, "reason": f"Code contains forbidden name '{node.id}'"}
+
+            if isinstance(node, ast.Attribute) and node.attr in dangerous:
+                return {"safe": False, "reason": f"Code contains forbidden attribute '{node.attr}'"}
+
+            # Block getattr/setattr/delattr with dangerous string constants
+            if isinstance(node, ast.Call):
+                func_name = None
+                if isinstance(node.func, ast.Name):
+                    func_name = node.func.id
+                elif isinstance(node.func, ast.Attribute):
+                    func_name = node.func.attr
+
+                if func_name in ("getattr", "setattr", "delattr"):
+                    for arg in node.args[1:]:
+                        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                            if arg.value in dangerous:
+                                return {
+                                    "safe": False,
+                                    "reason": f"Dangerous {func_name} with forbidden string '{arg.value}'",
+                                }
+
+            # Block string concatenation forming dangerous names
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+                concat = self._concat_strings(node)
+                if concat and concat in dangerous:
+                    return {
+                        "safe": False,
+                        "reason": f"String concatenation forms forbidden name '{concat}'",
+                    }
+
         return {"safe": True, "reason": ""}
+
+    @staticmethod
+    def _concat_strings(node):
+        """Extract concatenated string from nested BinOp(Add, Constant) nodes."""
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left = SafePythonExecutor._concat_strings(node.left)
+            right = SafePythonExecutor._concat_strings(node.right)
+            if left is not None and right is not None:
+                return left + right
+        return None
 
 
 class DockerSandbox:

@@ -149,6 +149,7 @@ class PolicyEnforcer:
     ):
         self.config = security_config or {}
         self.approval_manager = approval_manager
+        self.strict_mode = self.config.get("strict_mode", True)
         # 默认策略：风险等级 -> 决策
         self.default_policy = {
             RiskLevel.LOW: Decision.ALLOW,
@@ -232,9 +233,10 @@ class PolicyEnforcer:
             return Decision.BLOCK
 
         # 2. 风险等级评估
-        risk = RiskLevel.LOW
         if schema:
             risk = ToolAuditor.audit_tool(schema, tool_name, description)
+        else:
+            risk = RiskLevel.HIGH
         span.set_attribute("risk_level", risk.value)
 
         # 3. 投毒 / rug pull 实时检测（若 schema 已注册）
@@ -251,7 +253,13 @@ class PolicyEnforcer:
                     return Decision.BLOCK
 
         # 4. 应用策略
-        decision = self.default_policy.get(risk, Decision.ALLOW)
+        has_known_policy = risk in self.default_policy
+        decision = self.default_policy.get(risk, Decision.REQUIRE_APPROVAL)
+
+        # strict_mode: 没有 schema 或未知风险等级时强制需要审批
+        if self.strict_mode and (schema is None or not has_known_policy):
+            decision = Decision.REQUIRE_APPROVAL
+
         span.set_attribute("decision", decision.value)
 
         # 5. 审批流程

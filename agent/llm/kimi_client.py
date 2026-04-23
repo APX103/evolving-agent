@@ -32,13 +32,13 @@ class KimiLLMClient(LLMClient):
                 request.headers["User-Agent"] = user_agent
 
         # 同步 HTTP 客户端
-        sync_http_client = httpx.Client(
+        self._sync_http_client = httpx.Client(
             headers={"User-Agent": user_agent} if user_agent else {},
             event_hooks={"request": [_force_ua]},
             timeout=httpx.Timeout(30.0, connect=10.0),
         )
         # 异步 HTTP 客户端
-        async_http_client = httpx.AsyncClient(
+        self._async_http_client = httpx.AsyncClient(
             headers={"User-Agent": user_agent} if user_agent else {},
             event_hooks={"request": [_force_ua]},
             timeout=httpx.Timeout(30.0, connect=10.0),
@@ -47,12 +47,12 @@ class KimiLLMClient(LLMClient):
         self._sync_client = OpenAI(
             api_key=kimi_cfg.get("api_key", ""),
             base_url=kimi_cfg.get("base_url", "https://api.moonshot.cn/v1"),
-            http_client=sync_http_client,
+            http_client=self._sync_http_client,
         )
         self._async_client = AsyncOpenAI(
             api_key=kimi_cfg.get("api_key", ""),
             base_url=kimi_cfg.get("base_url", "https://api.moonshot.cn/v1"),
-            http_client=async_http_client,
+            http_client=self._async_http_client,
         )
         self.model = model or kimi_cfg.get("model", "kimi-latest")
         self.max_tokens = kimi_cfg.get("max_tokens", 4096)
@@ -407,6 +407,16 @@ class KimiLLMClient(LLMClient):
                 f"Failed to parse structured output: {e}",
                 raw_text=raw,
             ) from e
+
+    def close(self) -> None:
+        """关闭同步 HTTP 客户端和 OpenAI 客户端"""
+        self._sync_client.close()
+        self._sync_http_client.close()
+
+    async def aclose(self) -> None:
+        """关闭异步 HTTP 客户端和 OpenAI 客户端"""
+        await self._async_client.close()
+        await self._async_http_client.close()
 
     async def achat_structured(
         self,

@@ -3,7 +3,6 @@
 将用户的长程任务分解为可执行的步骤计划
 支持同步 + 异步双模式
 """
-import asyncio
 import logging
 from typing import Dict, List, Optional, Any
 
@@ -63,19 +62,6 @@ class Planner:
     def __init__(self, llm_client: LLMClient):
         self.llm_client = llm_client
         self.extractor = StructuredOutputExtractor(llm_client)
-
-    def decompose(self, task: str, available_tools: list = None) -> Optional[Plan]:
-        """同步包装：在独立事件循环中运行异步版本"""
-        try:
-            loop = asyncio.get_running_loop()
-            # 已在异步上下文中，使用 run_coroutine_threadsafe 或创建任务
-            # 但这里不能直接 await，所以需要特殊处理
-            # 实际上，在已有 loop 的上下文中不应该调用 sync 的 decompose
-            # 但为了兼容性，我们尝试用 nest_asyncio 或 fallback
-            return asyncio.run(self.adecompose(task, available_tools))
-        except RuntimeError:
-            # 没有 running loop，可以直接 asyncio.run
-            return asyncio.run(self.adecompose(task, available_tools))
 
     async def adecompose(self, task: str, available_tools: list = None) -> Optional[Plan]:
         """

@@ -4,6 +4,7 @@ Interact with remote A2A agents: send tasks, stream results, get/cancel tasks.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -25,10 +26,16 @@ logger = logging.getLogger(__name__)
 class A2AClient:
     """Client for interacting with a remote A2A agent."""
 
-    def __init__(self, agent_card: AgentCard, api_key: Optional[str] = None):
+    def __init__(
+        self,
+        agent_card: AgentCard,
+        api_key: Optional[str] = None,
+        timeout_seconds: float = 300,
+    ):
         self.agent_card = agent_card
         self.base_url = agent_card.url.rstrip("/")
         self.api_key = api_key
+        self._timeout_seconds = timeout_seconds
         self._session: Optional[aiohttp.ClientSession] = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -37,7 +44,7 @@ class A2AClient:
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
             self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=120),
+                timeout=aiohttp.ClientTimeout(total=self._timeout_seconds),
                 headers=headers,
             )
         return self._session
@@ -47,6 +54,7 @@ class A2AClient:
         message: Message,
         task_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        timeout: Optional[float] = None,
     ) -> Task:
         """
         Send a task synchronously and wait for the final result.
@@ -76,7 +84,8 @@ class A2AClient:
         url = f"{self.base_url}/tasks/send"
         logger.debug(f"[A2AClient] POST {url} task={task_id}")
 
-        async with session.post(url, json=payload) as resp:
+        req_timeout = aiohttp.ClientTimeout(total=timeout) if timeout is not None else None
+        async with session.post(url, json=payload, timeout=req_timeout) as resp:
             if resp.status != 200:
                 text = await resp.text()
                 raise RuntimeError(f"A2A send_task failed: HTTP {resp.status} {text[:500]}")
@@ -91,6 +100,7 @@ class A2AClient:
         message: Message,
         task_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        timeout: Optional[float] = None,
     ) -> Task:
         """
         Send a task asynchronously (fire-and-forget style).
@@ -111,7 +121,8 @@ class A2AClient:
 
         session = await self._get_session()
         url = f"{self.base_url}/tasks/send"
-        async with session.post(url, json=payload) as resp:
+        req_timeout = aiohttp.ClientTimeout(total=timeout) if timeout is not None else None
+        async with session.post(url, json=payload, timeout=req_timeout) as resp:
             if resp.status != 200:
                 text = await resp.text()
                 raise RuntimeError(f"A2A send_task_async failed: HTTP {resp.status} {text[:500]}")
@@ -225,3 +236,16 @@ class A2AClient:
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.close()
+
+    def __del__(self):
+        if self._session and not self._session.closed:
+            try:
+                asyncio.run(self.close())
+            except Exception:
+                pass
