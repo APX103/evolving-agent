@@ -19,24 +19,28 @@ class StepStatus(str, Enum):
 class Step:
     """计划中的一个步骤"""
     id: int
-    description: str           # 步骤描述（给人看）
-    tool: str                  # 使用什么工具: "llm" | "mcp:<name>" | "skill:<name>" | "sandbox"
+    description: str
+    tool: str
     arguments: Dict[str, Any] = field(default_factory=dict)
-    depends_on: List[int] = field(default_factory=list)  # 依赖的步骤 id
+    depends_on: List[int] = field(default_factory=list)
     status: StepStatus = StepStatus.PENDING
     result: Optional[str] = None
     error: Optional[str] = None
     retry_count: int = 0
+    # --- new fields (backward-compatible defaults) ---
+    max_retries: int = 0
+    on_failure: str = "abort"          # fallback step id or "retry" or "abort"
+    condition: Optional[str] = None    # simple expression evaluated against state
 
 
 @dataclass
 class Plan:
     """任务计划"""
-    task: str                  # 原始任务描述
+    task: str
     steps: List[Step]
     status: StepStatus = StepStatus.PENDING
     current_step_id: int = 0
-    summary: Optional[str] = None  # 最终结果摘要
+    summary: Optional[str] = None
 
     def get_step(self, step_id: int) -> Optional[Step]:
         for s in self.steps:
@@ -86,6 +90,9 @@ class Plan:
                     "result": s.result,
                     "error": s.error,
                     "retry_count": s.retry_count,
+                    "max_retries": s.max_retries,
+                    "on_failure": s.on_failure,
+                    "condition": s.condition,
                 }
                 for s in self.steps
             ]

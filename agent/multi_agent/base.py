@@ -99,11 +99,16 @@ class BaseAgent(ABC):
     temperature: float = 0.7
     max_tokens: int = 4096
 
-    def __init__(self, agent_id: str, memory, llm_client, config: Optional[Dict] = None):
+    def __init__(self, agent_id: str, memory, llm_client, config: Optional[Dict] = None, model_tier: Optional[str] = None):
         self.agent_id = agent_id
         self.memory = memory
         self.llm = llm_client
         self.config = config or {}
+        # 优先使用实例传入的 hint，其次使用类级默认值
+        if model_tier is not None:
+            self.model_tier = model_tier
+        elif not hasattr(self, "model_tier"):
+            self.model_tier = None
         self.working_memory: Dict = {}
         self.logger = logging.getLogger(f"agent.{self.name}")
         self._perf_mon = get_performance_monitor()
@@ -141,6 +146,12 @@ class BaseAgent(ABC):
             call_key = perf_mon.start_call(self.name)
         success = False
 
+        # 如果底层是 ModelRouter，根据 agent 的 model_tier 设置默认 tier
+        prev_tier = None
+        if self.model_tier and hasattr(self.llm, "default_tier"):
+            prev_tier = self.llm.default_tier
+            self.llm.default_tier = self.model_tier
+
         try:
             if hasattr(self.llm, "achat"):
                 result = await self.llm.achat(messages, temperature=temperature, max_tokens=max_tokens, stream=False)  # type: ignore[return-value]
@@ -160,6 +171,8 @@ class BaseAgent(ABC):
                 perf_mon.end_call(call_key, self.name, success=False, error=str(e))
             raise
         finally:
+            if prev_tier is not None and hasattr(self.llm, "default_tier"):
+                self.llm.default_tier = prev_tier
             span.end()
             if call_key and perf_mon and success:
                 perf_mon.end_call(call_key, self.name, success=True)
@@ -167,26 +180,36 @@ class BaseAgent(ABC):
     async def _stream_llm(self, messages: List[Dict], **kwargs) -> AsyncGenerator[str, None]:
         temperature = kwargs.get("temperature", self.temperature)
         max_tokens = kwargs.get("max_tokens", self.max_tokens)
-        if hasattr(self.llm, "achat"):
-            # 使用异步 chat，stream=True 返回 AsyncGenerator
-            result = await self.llm.achat(messages, temperature=temperature, max_tokens=max_tokens, stream=True)
-            if hasattr(result, '__aiter__'):
-                async for chunk in result:  # type: ignore[union-attr]
-                    yield chunk
+
+        prev_tier = None
+        if self.model_tier and hasattr(self.llm, "default_tier"):
+            prev_tier = self.llm.default_tier
+            self.llm.default_tier = self.model_tier
+
+        try:
+            if hasattr(self.llm, "achat"):
+                # 使用异步 chat，stream=True 返回 AsyncGenerator
+                result = await self.llm.achat(messages, temperature=temperature, max_tokens=max_tokens, stream=True)
+                if hasattr(result, '__aiter__'):
+                    async for chunk in result:  # type: ignore[union-attr]
+                        yield chunk
+                else:
+                    yield str(result)
+            elif hasattr(self.llm, "chat"):
+                import asyncio
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: self.llm.chat(messages, temperature=temperature, max_tokens=max_tokens, stream=True)
+                )
+                if hasattr(result, '__iter__'):
+                    for chunk in result:
+                        yield chunk
+                else:
+                    yield str(result)
             else:
-                yield str(result)
-        elif hasattr(self.llm, "chat"):
-            import asyncio
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                lambda: self.llm.chat(messages, temperature=temperature, max_tokens=max_tokens, stream=True)
-            )
-            if hasattr(result, '__iter__'):
-                for chunk in result:
-                    yield chunk
-            else:
-                yield str(result)
-        else:
-            result = await self._call_llm(messages, **kwargs)
-            yield result
+                result = await self._call_llm(messages, **kwargs)
+                yield result
+        finally:
+            if prev_tier is not None and hasattr(self.llm, "default_tier"):
+                self.llm.default_tier = prev_tier

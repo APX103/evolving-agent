@@ -19,7 +19,7 @@ T = TypeVar("T")
 
 
 class KimiLLMClient(LLMClient):
-    def __init__(self, config: Optional[Config] = None):
+    def __init__(self, config: Optional[Config] = None, model: Optional[str] = None):
         cfg = config or Config()
         kimi_cfg = cfg.kimi
 
@@ -52,13 +52,15 @@ class KimiLLMClient(LLMClient):
             base_url=kimi_cfg.get("base_url", "https://api.moonshot.cn/v1"),
             http_client=async_http_client,
         )
-        self.model = kimi_cfg.get("model", "kimi-latest")
+        self.model = model or kimi_cfg.get("model", "kimi-latest")
         self.max_tokens = kimi_cfg.get("max_tokens", 4096)
         self.temperature = kimi_cfg.get("temperature", 0.7)
         self.embedding_model = kimi_cfg.get("embedding_model", "text-embedding")
 
         self._local_model: Optional[Any] = None
         self._use_local = False
+        self._last_prompt_tokens: int = 0
+        self._last_completion_tokens: int = 0
 
     # ── 同步接口 ──
 
@@ -162,6 +164,9 @@ class KimiLLMClient(LLMClient):
                 completion_tokens = getattr(response.usage, "completion_tokens", 0) or 0
         except Exception:
             pass
+
+        self._last_prompt_tokens = prompt_tokens
+        self._last_completion_tokens = completion_tokens
 
         span.set_attribute("latency_ms", round(latency_ms, 2))
         span.set_attribute("prompt_tokens", prompt_tokens)

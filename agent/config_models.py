@@ -1,6 +1,6 @@
 """
-配置 Pydantic 模型
-为 config.yaml 提供 Schema 校验
+Configuration Pydantic models
+Provide schema validation for config.yaml
 """
 from typing import Any, Dict, List, Optional
 
@@ -8,7 +8,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class LLMConfig(BaseModel):
-    """LLM 配置"""
     model_config = ConfigDict(extra="ignore")
 
     api_key: str = ""
@@ -21,7 +20,6 @@ class LLMConfig(BaseModel):
 
 
 class AgentConfig(BaseModel):
-    """Agent 配置"""
     model_config = ConfigDict(extra="ignore")
 
     name: str = "evolving-agent"
@@ -32,17 +30,61 @@ class AgentConfig(BaseModel):
 
 
 class StorageConfig(BaseModel):
-    """存储配置"""
     model_config = ConfigDict(extra="ignore")
 
     path: str = "storage"
     conversation_retention_days: int = 30
 
 
+class MCPServerConfigModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    name: str
+    transport: str = "stdio"
+    command: Optional[str] = None
+    args: List[str] = Field(default_factory=list)
+    url: Optional[str] = None
+    env: Optional[Dict[str, str]] = None
+
+
+class MCPSecurityPolicyConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    low: str = "allow"
+    medium: str = "allow"
+    high: str = "require_approval"
+    critical: str = "block"
+
+
+class MCPSecurityConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = True
+    policy: MCPSecurityPolicyConfig = Field(default_factory=MCPSecurityPolicyConfig)
+    blocked_tools: List[str] = Field(default_factory=list)
+
+
+class MCPConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = False
+    servers: List[MCPServerConfigModel] = Field(default_factory=list)
+    security: MCPSecurityConfig = Field(default_factory=MCPSecurityConfig)
+
+
+class A2AConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = False
+    external_agents: List[str] = Field(default_factory=list)
+    discovery_ttl_seconds: int = 300
+
+
 class AppConfig(BaseModel):
-    """应用根配置"""
     model_config = ConfigDict(extra="ignore")
 
     kimi: LLMConfig = Field(default_factory=LLMConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
+    a2a: A2AConfig = Field(default_factory=A2AConfig)

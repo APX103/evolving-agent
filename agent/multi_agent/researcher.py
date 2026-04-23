@@ -16,6 +16,7 @@ class ResearcherAgent(BaseAgent):
 
     name = "researcher"
     description = "信息检索、网页浏览、调研分析"
+    model_tier = "heavy"
     system_prompt_template = """你是一个高效的研究员。擅长信息检索、资料收集和数据分析。
 
 工作流程：

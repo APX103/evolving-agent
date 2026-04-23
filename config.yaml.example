@@ -1,67 +1,90 @@
-# Kimi API 配置
-# 获取 API Key: https://platform.moonshot.cn/
+# Kimi API configuration
+# Get API Key: https://platform.moonshot.cn/
 kimi:
-  api_key: "your-kimi-api-key-here"   # 必填：你的 Kimi API Key
-  base_url: "https://api.moonshot.cn/v1"   # Moonshot API（需单独充值）
-  # base_url: "https://api.kimi.com/coding/v1"  # Kimi Code backend（coding plan 套餐通用）
-  model: "kimi-latest"                  # 可选: kimi-latest, kimi-k2, kimi-k2-0711-preview 等
-  embedding_model: "text-embedding"   # Embedding 模型
+  api_key: "your-kimi-api-key-here"   # Required: your Kimi API Key
+  base_url: "https://api.moonshot.cn/v1"   # Moonshot API
+  # base_url: "https://api.kimi.com/coding/v1"  # Kimi Code backend
+  model: "kimi-latest"                  # Optional: kimi-latest, kimi-k2, etc.
+  embedding_model: "text-embedding"   # Embedding model
   max_tokens: 4096
   temperature: 0.7
-  user_agent: ""                        # 特殊客户端标识，如 "KimiCLI/1.3"
+  user_agent: ""                        # Special client identifier
 
-# Agent 基础配置
+# Agent base configuration
 agent:
-  name: "Evo"                           # Agent 的名字
-  language: "zh"                        # 默认语言: zh/en
-  max_short_term_turns: 10              # 短期记忆保留最近 N 轮
-  learn_after_session: true             # 会话结束后是否自动学习
-  reflect_threshold: 5                  # 积累 N 个会话后触发反思
+  name: "Evo"                           # Agent name
+  language: "zh"                        # Default language: zh/en
+  max_short_term_turns: 10              # Short-term memory turns
+  learn_after_session: true             # Auto-learn after session
+  reflect_threshold: 5                  # Reflection threshold
 
-# MCP (Model Context Protocol) 配置
-# 接入外部工具生态：https://modelcontextprotocol.io/
+# MCP (Model Context Protocol) configuration
+# Connect external tool ecosystem: https://modelcontextprotocol.io/
 mcp:
-  enabled: false                       # 是否启用 MCP
+  enabled: false                       # Enable MCP
   servers:
     - name: "filesystem"
       transport: "stdio"
       command: "npx"
-      args: ["-y", "@modelcontextprotocol/server-filesystem", "/Users"]  # 文件系统访问
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/Users"]
     - name: "fetch"
       transport: "stdio"
       command: "uvx"
-      args: ["mcp-server-fetch"]        # HTTP 请求/网页获取
-    # - name: "playwright"
-    #   transport: "stdio"
-    #   command: "npx"
-    #   args: ["-y", "@anthropic-ai/mcp-server-playwright"]  # 浏览器自动化
+      args: ["mcp-server-fetch"]
+    # HTTP transport example (SSE)
+    # - name: "remote-echo"
+    #   transport: "sse"
+    #   url: "http://localhost:3000/sse"
+    # Streamable HTTP transport example
+    # - name: "remote-http"
+    #   transport: "http"
+    #   url: "http://localhost:3000/mcp"
+  security:
+    enabled: true
+    policy:
+      low: "allow"
+      medium: "allow"
+      high: "require_approval"
+      critical: "block"
+    blocked_tools: []                   # Explicitly blocked tool names or server::tool keys
 
-# 敏感操作审批配置
+# A2A (Agent-to-Agent) protocol configuration
+# Discover and delegate tasks to external A2A-compatible agents
+a2a:
+  enabled: false                       # Enable A2A external agent discovery
+  external_agents: []                  # List of base URLs to discover
+  # example:
+  #   - "http://localhost:8001"
+  #   - "http://localhost:8002"
+  discovery_ttl_seconds: 300           # Cache TTL for agent discovery
+
+# Sensitive operation approval configuration
 approval:
-  enabled: true                        # 是否启用人工审批
-  require_approval_for:                # 哪些操作需要审批
+  enabled: true                        # Enable human approval
+  mode: "blocking"                     # blocking | nonblocking | auto
+  require_approval_for:
     - "shell"
     - "file_write"
     - "mcp:filesystem:write"
 
-# 多 Agent 协作配置 (v4.0+)
+# Multi-agent collaboration configuration (v4.0+)
  multi_agent:
-   enabled: true                       # 启用多 Agent 模式
-   default_agent: "companion"          # 默认 Agent
-   router_temperature: 0.3             # Router 意图分类温度
-   context_budget: 3500                # 上下文总预算 (tokens)
-   session_ttl: 1800                   # 会话超时 (秒)
+   enabled: true
+   default_agent: "companion"
+   router_temperature: 0.3
+   context_budget: 3500
+   session_ttl: 1800
 
- # 飞书机器人配置 (v4.0+)
+ # Feishu bot configuration (v4.0+)
  feishu:
-   enabled: false                      # 是否启用飞书机器人
-   app_id: "cli_xxxxxxxx"             # 飞书应用 ID
-   app_secret: "xxxxxxxx"             # 飞书应用密钥
-   encrypt_key: ""                     # 加密密钥（可选）
-   verification_token: ""              # 验证令牌（可选）
-   bot_name: "Evo"                     # 机器人名称（群聊 @用）
+   enabled: false
+   app_id: "cli_xxxxxxxx"
+   app_secret: "xxxxxxxx"
+   encrypt_key: ""
+   verification_token: ""
+   bot_name: "Evo"
 
- # 记忆存储路径
+ # Storage paths
  storage:
    base_path: "./storage"
    conversations: "./storage/conversations"

@@ -4,6 +4,7 @@ Companion Agent - 陪伴者：日常对话、情感交流
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict
 
 from agent.multi_agent.base import BaseAgent, AgentContext, AgentResponse, IntentClassification
@@ -45,6 +46,9 @@ class CompanionAgent(BaseAgent):
         messages = context.to_messages(system_prompt)
         messages.append({"role": "user", "content": user_input})
 
+        # 动态选择模型层级：问候/短句用 lightweight，深层对话用 standard
+        self._select_tier(user_input)
+
         try:
             response_text = await self._call_llm(messages)
             return AgentResponse(
@@ -59,6 +63,26 @@ class CompanionAgent(BaseAgent):
                 agent_name=self.name,
                 metadata={"error": str(e)},
             )
+
+    def _select_tier(self, user_input: str) -> None:
+        """根据输入内容动态选择模型层级"""
+        text = user_input.strip()
+        # 问候/短句 -> lightweight
+        simple_patterns = [
+            r"^(hi|hello|hey|你好|您好|哈喽|嗨|在吗|在么|早上好|下午好|晚上好|再见|拜拜|拜|好的|知道了|明白|嗯|哦)",
+        ]
+        if len(text) < 30:
+            for pat in simple_patterns:
+                if re.match(pat, text, re.IGNORECASE):
+                    self.model_tier = "lightweight"
+                    return
+        # 深层对话/长文本 -> standard
+        if len(text) > 100 or re.search(r"(为什么|怎么|感受|想法|建议|意义)", text):
+            self.model_tier = "standard"
+            return
+        # 默认保持继承值或 lightweight
+        if not self.model_tier:
+            self.model_tier = "lightweight"
 
     def can_handle(self, intent: IntentClassification) -> float:
         if intent.primary_intent in ("chat", "emotional"):

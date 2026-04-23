@@ -16,6 +16,7 @@ class CoderAgent(BaseAgent):
 
     name = "coder"
     description = "代码编写、调试、文件操作、技术实现"
+    model_tier = "heavy"
     system_prompt_template = """你是一个专业的编程助手。擅长 Python、JavaScript、TypeScript、Rust 等语言。
 
 核心能力：

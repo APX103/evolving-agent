@@ -35,6 +35,7 @@ class RouterAgent(BaseAgent):
 
     name = "router"
     description = "意图分类与 Agent 调度"
+    model_tier = "lightweight"
     system_prompt_template = """你是意图分类专家。分析用户输入，分类为以下意图之一：
 - chat: 闲聊/日常对话
 - emotional: 情感支持/倾诉
@@ -52,11 +53,28 @@ class RouterAgent(BaseAgent):
     async def process(self, user_input: str, context: AgentContext) -> AgentResponse:
         """Router 不直接回复用户，只做分类"""
         intent = await self.classify(user_input, context)
+        # 根据意图设置模型层级
+        self._set_model_tier(intent)
         return AgentResponse(
             content=f"意图: {intent.primary_intent} -> {intent.target_agent}",
             agent_name=self.name,
             metadata={"intent": intent},
         )
+
+    def _set_model_tier(self, intent) -> None:
+        """根据意图分类设置 Router 自身的 model_tier（供下游 Agent 参考）"""
+        intent_to_tier = {
+            "chat": "lightweight",
+            "emotional": "lightweight",
+            "code": "heavy",
+            "debug": "heavy",
+            "research": "heavy",
+            "write": "standard",
+            "plan": "heavy",
+            "tool": "standard",
+        }
+        tier = intent_to_tier.get(intent.primary_intent, "standard")
+        self.model_tier = tier
 
     def can_handle(self, intent: IntentClassification) -> float:
         return 1.0  # Router 永远先处理
@@ -64,6 +82,12 @@ class RouterAgent(BaseAgent):
     async def classify(self, user_input: str, context: AgentContext) -> IntentClassification:
         """LLM 意图分类"""
         prompt = self._build_classify_prompt(user_input, context)
+
+        # 临时设置模型层级（RouterAgent 直接调用 llm，不走 _call_llm）
+        prev_tier = None
+        if self.model_tier and hasattr(self.llm, "default_tier"):
+            prev_tier = self.llm.default_tier
+            self.llm.default_tier = self.model_tier
 
         try:
             intent = await self.llm.achat_structured(
@@ -78,10 +102,15 @@ class RouterAgent(BaseAgent):
                 intent.target_agent = INTENT_AGENT_MAP.get(intent.primary_intent, "companion")
             # 确保 confidence 在合法范围
             intent.confidence = min(1.0, max(0.0, intent.confidence))
+            # 根据意图更新 model_tier
+            self._set_model_tier(intent)
             return intent
         except Exception as e:
             logger.warning(f"[Router] LLM 分类失败: {e}")
             return self._fallback_classify(user_input)
+        finally:
+            if prev_tier is not None and hasattr(self.llm, "default_tier"):
+                self.llm.default_tier = prev_tier
 
     def _build_classify_prompt(self, user_input: str, context: AgentContext) -> str:
         """构建分类 prompt"""

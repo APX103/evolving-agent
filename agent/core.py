@@ -150,7 +150,12 @@ class EvolvingAgent:
         if not servers:
             return
 
-        self.mcp_client = MCPClient(servers)
+        mcp_security_cfg = mcp_cfg.get("security", {})
+        self.mcp_client = MCPClient(
+            servers=servers,
+            approval_manager=self.approval_mgr,
+            security_config=mcp_security_cfg,
+        )
         logger.info(f"[MCP] Client 已初始化，{len(servers)} 个 server 待连接")
 
     async def ainit_mcp(self):
