@@ -315,6 +315,7 @@ class PythonSkill(Skill):
 def build_default_skills(approval: Optional[ApprovalManager] = None):
     """构建默认 Skill 集合"""
     from agent.skill import SkillRegistry
+    from agent.skills_dev import EditSkill, MapSkill, GrepSkill, TestSkill, GitSkill
 
     registry = SkillRegistry()
     registry.register(EchoSkill())
@@ -323,5 +324,12 @@ def build_default_skills(approval: Optional[ApprovalManager] = None):
     registry.register(FileReadSkill())
     registry.register(FileWriteSkill())
     registry.register(ShellSkill(approval))
+
+    # 开发工具 Skills
+    registry.register(EditSkill())
+    registry.register(MapSkill())
+    registry.register(GrepSkill())
+    registry.register(TestSkill())
+    registry.register(GitSkill())
 
     return registry
