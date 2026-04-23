@@ -29,6 +29,7 @@ from agent.executor import Executor
 from agent.plan import Plan, StepStatus
 from agent.checkpoint import CheckpointManager
 from agent.procedural_memory import ProceduralMemory
+from agent.world_state import WorldState
 from agent.approval import ApprovalManager
 
 logger = logging.getLogger("agent.core")
@@ -56,7 +57,11 @@ class EvolvingAgent:
             base_path=user_storage_base,
         )
         self.learner = Learner(self.llm_client, self.memory)
-        self.reflector = Reflector(self.llm_client, self.memory)
+        self.reflector = Reflector(
+            self.llm_client,
+            self.memory,
+            procedural_memory=self.procedural_memory,
+        )
 
         self.personality = PersonalityEngine(
             storage_path=os.path.join(user_storage_base, "personality"),
@@ -82,6 +87,12 @@ class EvolvingAgent:
             storage_path=os.path.join(user_storage_base, "procedural_memory"),
             storage=self.storage,
             llm_client=self.llm_client,
+        )
+
+        # 世界状态（环境认知）
+        self.world_state = WorldState(
+            mcp_client=self.mcp_client,
+            base_path=user_storage_base,
         )
 
         # 审批管理器
@@ -189,6 +200,11 @@ class EvolvingAgent:
         procedural = self.procedural_memory.get_prompt_text(query_hint)
         if procedural:
             parts.append(f"\n{procedural}")
+
+        # 注入环境状态
+        world_context = self.world_state.to_context_string()
+        if world_context:
+            parts.append(f"\n{world_context}")
 
         parts.append("\n【行为指南】")
         parts.append("- 自然对话，不需要过度礼貌")

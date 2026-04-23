@@ -1,11 +1,16 @@
 """
-反思进化模块 (v2.2)
-自我批评式反思 + 通过 personality engine 调整状态
+反思进化模块 (v2.3)
+自我批评式反思 + 产出可执行规则写入 ProceduralMemory
+形成真正的"反思-行动"闭环
 """
-from typing import Dict, List
+import json
+import logging
+from typing import Dict, List, Optional
 
 from agent.llm.base import LLMClient
-from agent.memory import MemoryManager
+from agent.memory_module import MemoryManager
+
+logger = logging.getLogger(__name__)
 
 
 # ── 反思 few-shot ──
@@ -16,6 +21,7 @@ _REFLECTION_SYSTEM = """你是一位严厉但公正的 AI 导师。
 - 识别用户反复出现的模式和未被满足的需求
 - 给出具体、可执行的改进方向，不要空话
 - 反思要简洁有力，像一位资深工程师的 code review
+- 产出具体的"行为规则"，可直接写入规则库
 """
 
 _REFLECTION_FORMAT = """以 JSON 输出：
@@ -27,22 +33,32 @@ _REFLECTION_FORMAT = """以 JSON 输出：
   "user_patterns": "用户行为的深层模式洞察",
   "personality_update": "基于反思，Agent 应该在性格/风格上做出的具体调整",
   "growth_goals": ["接下来3个最重要的提升目标"],
-  "confidence_change": "建议的自信度调整（+0.1 更自信 / -0.1 更谨慎）"
+  "confidence_change": "建议的自信度调整（+0.1 更自信 / -0.1 更谨慎）",
+  "procedural_rules": [
+    {"pattern": "用户表现出XX时", "action": "我应该YY", "confidence": 0.8}
+  ]
 }
+procedural_rules 必须是具体的"当...时，我应该..."行为规则，confidence 0.0-1.0。
 只返回 JSON，不要废话。
 """
 
 
 class Reflector:
-    def __init__(self, llm_client: LLMClient, memory: MemoryManager):
+    def __init__(
+        self,
+        llm_client: LLMClient,
+        memory: MemoryManager,
+        procedural_memory=None,
+    ):
         self.llm_client = llm_client
         self.memory = memory
+        self.procedural_memory = procedural_memory
 
     def should_reflect(self, threshold: int = 5) -> bool:
         return self.memory.session_count > 0 and self.memory.session_count % threshold == 0
 
     def reflect(self) -> Dict:
-        """执行深度自我批评式反思"""
+        """执行深度自我批评式反思，产出可执行规则"""
         # 收集素材
         recent_knowledge = self.memory.search_knowledge(category="", limit=25)
         profile = self.memory.get_profile()
@@ -60,15 +76,34 @@ class Reflector:
         # 保存反思到记忆
         self.memory.add_reflection(reflection)
 
-        # 修复：不再直接修改 memory profile 的 confidence
-        # confidence 统一由 personality engine 管理
-        # 只保存 personality_update 到 profile（这是文本性的自我认知描述）
+        # 更新 profile
         if reflection.get("personality_update"):
             self.memory.update_profile("agent_personality", reflection["personality_update"])
 
-        # 清理旧知识（每次反思时顺带做）
+        # ── 核心改进：产出可执行规则写入 ProceduralMemory ──
+        rules_added = 0
+        if self.procedural_memory and reflection.get("procedural_rules"):
+            for rule in reflection["procedural_rules"]:
+                try:
+                    pattern = rule.get("pattern", "").strip()
+                    action = rule.get("action", "").strip()
+                    confidence = float(rule.get("confidence", 0.7))
+                    if pattern and action:
+                        self.procedural_memory.add_rule(
+                            pattern=pattern,
+                            action=action,
+                            confidence=min(1.0, max(0.1, confidence)),
+                        )
+                        rules_added += 1
+                except Exception as e:
+                    logger.debug(f"[Reflector] 规则写入失败: {e}")
+            if rules_added > 0:
+                logger.info(f"[Reflector] 产出 {rules_added} 条行为规则写入 ProceduralMemory")
+
+        # 清理旧知识
         self.memory.cleanup_stale_knowledge(days=60, min_access=1)
 
+        reflection["rules_added"] = rules_added
         return reflection
 
     def _build_reflection_prompt(self, knowledge: List[Dict], profile: Dict, past_reflections: List[Dict]) -> str:
@@ -102,12 +137,12 @@ class Reflector:
 2. 用户有没有反复提同样的需求但你一直没满足？
 3. 你有没有过度自信或过度谨慎的时候？
 4. 用户最不耐烦/最满意的时刻分别是什么？
+5. 产出 2-3 条具体的"当用户...时，我应该..."行为规则
 
 {_REFLECTION_FORMAT}
 """
 
     def _parse_reflection(self, response: str) -> Dict:
-        import json
         try:
             cleaned = response.strip()
             if cleaned.startswith("```json"):
@@ -127,7 +162,8 @@ class Reflector:
                 "user_patterns": data.get("user_patterns", ""),
                 "personality_update": data.get("personality_update", ""),
                 "growth_goals": data.get("growth_goals", []),
-                "confidence_change": data.get("confidence_change", "")
+                "confidence_change": data.get("confidence_change", ""),
+                "procedural_rules": data.get("procedural_rules", []),
             }
         except Exception as e:
             return {
@@ -138,5 +174,6 @@ class Reflector:
                 "user_patterns": "",
                 "personality_update": "",
                 "growth_goals": [],
-                "confidence_change": ""
+                "confidence_change": "",
+                "procedural_rules": [],
             }
