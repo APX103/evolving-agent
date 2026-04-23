@@ -64,8 +64,8 @@ def print_banner(version="3.2"):
     print()
 
 
-def run_classic_mode(args):
-    """经典模式（v3.2 兼容）"""
+async def run_classic_mode(args):
+    """经典模式（v3.2 兼容，已 async 化）"""
     from agent.core import EvolvingAgent
 
     print_banner("3.2")
@@ -77,6 +77,7 @@ def run_classic_mode(args):
 
     try:
         agent = EvolvingAgent("config.yaml", user_id=args.user)
+        await agent.ainit_mcp()
     except Exception as e:
         print(f"❌ 初始化失败: {e}")
         return
@@ -103,13 +104,13 @@ def run_classic_mode(args):
             continue
 
         try:
-            response = agent.chat(user_input)
+            response = await agent.chat(user_input)
             if isinstance(response, str):
                 print(f"{agent.name} > {response}\n")
             else:
                 print(f"{agent.name} > ", end="", flush=True)
                 full_text = ""
-                for chunk in response:
+                async for chunk in response:
                     print(chunk, end="", flush=True)
                     full_text += chunk
                 print("\n")
@@ -147,9 +148,8 @@ def _handle_classic_command(agent, cmd):
         print_banner("3.2")
 
 
-def run_multi_agent_mode(args):
+async def run_multi_agent_mode(args):
     """多 Agent 协作模式 (v4.0)"""
-    import asyncio
     from agent.core import EvolvingAgent
     from agent.multi_agent.agents_init import create_registry
 
@@ -163,6 +163,7 @@ def run_multi_agent_mode(args):
     try:
         # 用经典 Agent 作为 memory/llm 来源
         classic_agent = EvolvingAgent("config.yaml", user_id=args.user)
+        await classic_agent.ainit_mcp()
         registry = create_registry(
             classic_agent.memory,
             classic_agent.llm_client,
@@ -177,41 +178,38 @@ def run_multi_agent_mode(args):
     print(f"   可用 Agent: {', '.join(a['name'] for a in agents_info)}")
     print(f"   Router 会自动为你选择最合适的 Agent\n")
 
-    async def chat_loop():
-        while True:
-            try:
-                user_input = input("你 > ").strip()
-            except (KeyboardInterrupt, EOFError):
-                print("\n");
-                user_input = "/bye"
+    while True:
+        try:
+            user_input = input("你 > ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\n");
+            user_input = "/bye"
 
-            if not user_input:
-                continue
+        if not user_input:
+            continue
 
-            if user_input == "/bye":
-                classic_agent.end_session()
-                print("再见！下次我会更聪明 👋\n")
-                continue
+        if user_input == "/bye":
+            classic_agent.end_session()
+            print("再见！下次我会更聪明 👋\n")
+            continue
 
-            if user_input == "/agents":
-                print(f"\n🤖 可用 Agent 列表:")
-                for a in agents_info:
-                    print(f"   • {a['name']}: {a['description']}")
-                print()
-                continue
+        if user_input == "/agents":
+            print(f"\n🤖 可用 Agent 列表:")
+            for a in agents_info:
+                print(f"   • {a['name']}: {a['description']}")
+            print()
+            continue
 
-            if user_input in ("/stats", "/mem", "/clean", "/skills", "/personality", "/help"):
-                _handle_classic_command(classic_agent, user_input)
-                continue
+        if user_input in ("/stats", "/mem", "/clean", "/skills", "/personality", "/help"):
+            _handle_classic_command(classic_agent, user_input)
+            continue
 
-            try:
-                response = await registry.process(user_input, args.user, source="cli")
-                agent_tag = f"[{response.agent_name}]" if response.agent_name != "companion" else ""
-                print(f"{classic_agent.name}{agent_tag} > {response.content}\n")
-            except Exception as e:
-                print(f"❌ 出错了: {e}\n")
-
-    asyncio.run(chat_loop())
+        try:
+            response = await registry.process(user_input, args.user, source="cli")
+            agent_tag = f"[{response.agent_name}]" if response.agent_name != "companion" else ""
+            print(f"{classic_agent.name}{agent_tag} > {response.content}\n")
+        except Exception as e:
+            print(f"❌ 出错了: {e}\n")
 
 
 def main():
@@ -224,9 +222,9 @@ def main():
     setup_logging()
 
     if args.mode == "multi":
-        run_multi_agent_mode(args)
+        asyncio.run(run_multi_agent_mode(args))
     else:
-        run_classic_mode(args)
+        asyncio.run(run_classic_mode(args))
 
 
 if __name__ == "__main__":

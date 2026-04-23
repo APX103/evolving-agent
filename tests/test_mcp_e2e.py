@@ -19,7 +19,7 @@ def log(msg):
     print(f"[E2E] {msg}")
 
 
-def test_mcp_connection():
+async def test_mcp_connection():
     log("=" * 50)
     log("测试 MCP 端到端连接")
     log("=" * 50)
@@ -38,7 +38,7 @@ def test_mcp_connection():
 
     # 1. 连接
     log("1. 连接 MCP Server...")
-    results = client.connect_all()
+    results = await client.connect_all()
     log(f"   连接结果: {results}")
     assert results.get("echo") is True, "连接失败"
     log("   ✅ 连接成功")
@@ -55,7 +55,7 @@ def test_mcp_connection():
 
     # 3. 调用 tool
     log("3. 调用 echo tool...")
-    result = client.call_tool("echo", "echo", {"message": "Hello MCP!"})
+    result = await client.call_tool("echo", "echo", {"message": "Hello MCP!"})
     log(f"   success={result.success}")
     log(f"   content={result.content[:100] if result.content else 'None'}")
     assert result.success is True, f"调用失败: {result.error}"
@@ -64,14 +64,14 @@ def test_mcp_connection():
 
     # 4. call_tool_by_name
     log("4. 通过名称调用...")
-    result2 = client.call_tool_by_name("echo", {"message": "By name!"})
+    result2 = await client.call_tool_by_name("echo", {"message": "By name!"})
     assert result2.success is True, f"by_name 调用失败: {result2.error}"
     assert "By name!" in result2.content, f"by_name 返回不对: {result2.content}"
     log("   ✅ call_tool_by_name 成功")
 
     # 5. 断开连接
     log("5. 断开连接...")
-    client.disconnect_all()
+    await client.disconnect_all()
     log("   ✅ 断开成功")
 
     log("")
@@ -80,13 +80,4 @@ def test_mcp_connection():
 
 
 if __name__ == "__main__":
-    try:
-        test_mcp_connection()
-    except AssertionError as e:
-        print(f"\n❌ 测试失败: {e}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n❌ 测试异常: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+    asyncio.run(test_mcp_connection())

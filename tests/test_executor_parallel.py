@@ -28,6 +28,15 @@ class MockLLM:
         self.call_times.append((t0, t1))
         return f"result_for_{prompt[:20]}"
 
+    async def aquick_chat(self, prompt, system=None):
+        import asyncio
+        self.call_count += 1
+        t0 = time.time()
+        await asyncio.sleep(self.delay)
+        t1 = time.time()
+        self.call_times.append((t0, t1))
+        return f"result_for_{prompt[:20]}"
+
 
 def test_serial_execution():
     """测试串行计划（步骤有依赖）"""
@@ -121,6 +130,9 @@ def test_step_failure_handling():
             if "fail" in prompt.lower():
                 raise RuntimeError("模拟失败")
             return f"ok:{prompt}"
+
+        async def aquick_chat(self, prompt, system=None):
+            return self.quick_chat(prompt, system)
 
     executor = Executor(llm_client=FailingLLM(), max_workers=2)
 

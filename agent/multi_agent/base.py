@@ -135,7 +135,7 @@ class BaseAgent(ABC):
         temperature = kwargs.get("temperature", self.temperature)
         max_tokens = kwargs.get("max_tokens", self.max_tokens)
         if hasattr(self.llm, "achat"):
-            return await self.llm.achat(messages, temperature=temperature, max_tokens=max_tokens)
+            return await self.llm.achat(messages, temperature=temperature, max_tokens=max_tokens, stream=False)  # type: ignore[return-value]
         import asyncio
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
@@ -146,9 +146,14 @@ class BaseAgent(ABC):
     async def _stream_llm(self, messages: List[Dict], **kwargs) -> AsyncGenerator[str, None]:
         temperature = kwargs.get("temperature", self.temperature)
         max_tokens = kwargs.get("max_tokens", self.max_tokens)
-        if hasattr(self.llm, "astream_chat"):
-            async for chunk in self.llm.astream_chat(messages, temperature=temperature, max_tokens=max_tokens):
-                yield chunk
+        if hasattr(self.llm, "achat"):
+            # 使用异步 chat，stream=True 返回 AsyncGenerator
+            result = await self.llm.achat(messages, temperature=temperature, max_tokens=max_tokens, stream=True)
+            if hasattr(result, '__aiter__'):
+                async for chunk in result:  # type: ignore[union-attr]
+                    yield chunk
+            else:
+                yield str(result)
         elif hasattr(self.llm, "chat"):
             import asyncio
             loop = asyncio.get_event_loop()

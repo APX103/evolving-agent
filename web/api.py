@@ -4,11 +4,14 @@ WebSocket 实时聊天 + Agent 管理
 """
 import asyncio
 import json
+import logging
 import os
 import sys
 from typing import Dict
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+
+logger = logging.getLogger(__name__)
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 
@@ -35,7 +38,13 @@ class ConnectionManager:
         self.active_connections[client_id] = websocket
         # 每个连接一个独立的 Agent 实例
         config_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
-        self.agents[client_id] = EvolvingAgent(config_path)
+        agent = EvolvingAgent(config_path)
+        self.agents[client_id] = agent
+        # 异步初始化 MCP（如果配置启用）
+        try:
+            await agent.ainit_mcp()
+        except Exception as e:
+            logger.warning(f"[Web] MCP 初始化失败: {e}")
 
     def disconnect(self, client_id: str):
         if client_id in self.active_connections:
@@ -103,7 +112,7 @@ async def websocket_chat(websocket: WebSocket, client_id: str):
             await manager.send_json(client_id, {"type": "thinking", "content": True})
 
             # 获取 Agent 回复
-            response = agent.chat(user_input)
+            response = await agent.chat(user_input)
 
             # 处理 Skill 直接返回（字符串）
             if isinstance(response, str):
@@ -121,7 +130,7 @@ async def websocket_chat(websocket: WebSocket, client_id: str):
             full_text = ""
             await manager.send_json(client_id, {"type": "thinking", "content": False})
 
-            for chunk in response:
+            async for chunk in response:
                 full_text += chunk
                 await manager.send_json(client_id, {
                     "type": "stream",

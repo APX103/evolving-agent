@@ -1,6 +1,7 @@
 """
 MCP (Model Context Protocol) 客户端
 使用官方 MCP SDK (mcp>=1.0)，支持 stdio 传输
+纯异步接口，外部调用方负责提供 running event loop
 """
 import asyncio
 import logging
@@ -46,7 +47,7 @@ class MCPCallResult:
 class MCPClient:
     """
     MCP 协议客户端（官方 SDK 封装）
-    对外提供同步接口，内部使用 asyncio 驱动官方 async SDK
+    纯异步接口。外部调用方（FastAPI / asyncio.run）负责提供 running loop。
     """
 
     def __init__(self, servers: Optional[List[MCPServerConfig]] = None):
@@ -54,21 +55,11 @@ class MCPClient:
         self._exit_stack: Optional[AsyncExitStack] = None
         self._sessions: Dict[str, ClientSession] = {}
         self._tools: List[MCPTool] = []
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     # ── 连接管理 ──
 
-    def connect_all(self) -> Dict[str, bool]:
-        """连接所有配置的 MCP Server，返回连接结果"""
-        try:
-            self._loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self._loop)
-            return self._loop.run_until_complete(self._connect_all_async())
-        except Exception as e:
-            logger.warning(f"[MCP] 连接失败: {e}")
-            return {s.name: False for s in self.servers}
-
-    async def _connect_all_async(self) -> Dict[str, bool]:
+    async def connect_all(self) -> Dict[str, bool]:
+        """异步连接所有配置的 MCP Server，返回连接结果"""
         self._exit_stack = AsyncExitStack()
         results = {}
 
@@ -94,24 +85,21 @@ class MCPClient:
                 logger.warning(f"[MCP] 连接 server '{cfg.name}' 失败: {e}")
 
         if any(results.values()):
-            await self._refresh_tools_async()
+            await self._refresh_tools()
 
         return results
 
-    def disconnect_all(self):
-        """断开所有连接"""
-        if self._exit_stack and self._loop and not self._loop.is_closed():
+    async def disconnect_all(self):
+        """异步断开所有连接"""
+        if self._exit_stack:
             try:
-                self._loop.run_until_complete(self._exit_stack.aclose())
+                await self._exit_stack.aclose()
             except Exception as e:
                 logger.warning(f"[MCP] 断开连接时出错: {e}")
             finally:
                 self._exit_stack = None
                 self._sessions.clear()
                 self._tools.clear()
-        if self._loop and not self._loop.is_closed():
-            self._loop.close()
-            self._loop = None
 
     # ── 工具发现 ──
 
@@ -119,7 +107,7 @@ class MCPClient:
         """列出所有可用 MCP tools"""
         return list(self._tools)
 
-    async def _refresh_tools_async(self):
+    async def _refresh_tools(self):
         """异步刷新工具列表"""
         all_tools = []
         for name, session in self._sessions.items():
@@ -143,22 +131,17 @@ class MCPClient:
 
     # ── 工具调用 ──
 
-    def call_tool(self, server_name: str, tool_name: str, arguments: Dict) -> MCPCallResult:
-        """调用指定 MCP tool（同步包装）"""
-        try:
-            if self._loop is None or self._loop.is_closed():
-                return MCPCallResult(success=False, content=None, error="MCP 未连接")
-            return self._loop.run_until_complete(self._call_tool_async(server_name, tool_name, arguments))
-        except Exception as e:
-            logger.warning(f"[MCP] 调用 tool '{tool_name}' 失败: {e}")
-            return MCPCallResult(success=False, content=None, error=str(e))
-
-    async def _call_tool_async(self, server_name: str, tool_name: str, arguments: Dict) -> MCPCallResult:
+    async def call_tool(self, server_name: str, tool_name: str, arguments: Dict) -> MCPCallResult:
+        """异步调用指定 MCP tool"""
         session = self._sessions.get(server_name)
         if not session:
             return MCPCallResult(success=False, content=None, error=f"server '{server_name}' 未连接")
 
-        result = await session.call_tool(tool_name, arguments=arguments)
+        try:
+            result = await session.call_tool(tool_name, arguments=arguments)
+        except Exception as e:
+            logger.warning(f"[MCP] 调用 tool '{tool_name}' 失败: {e}")
+            return MCPCallResult(success=False, content=None, error=str(e))
 
         texts = []
         for content in result.content:
@@ -179,9 +162,9 @@ class MCPClient:
             content="\n".join(texts) if texts else "",
         )
 
-    def call_tool_by_name(self, tool_name: str, arguments: Dict) -> MCPCallResult:
+    async def call_tool_by_name(self, tool_name: str, arguments: Dict) -> MCPCallResult:
         """根据 tool name 自动查找 server 并调用"""
         for tool in self._tools:
             if tool.name == tool_name:
-                return self.call_tool(tool.server, tool_name, arguments)
+                return await self.call_tool(tool.server, tool_name, arguments)
         return MCPCallResult(success=False, content=None, error=f"未找到 tool: {tool_name}")

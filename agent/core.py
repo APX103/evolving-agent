@@ -114,7 +114,7 @@ class EvolvingAgent:
         self.event_bus = default_bus
 
     def _init_mcp(self):
-        """初始化 MCP Client，连接配置的 MCP Servers"""
+        """同步初始化 MCP Client 配置（不连接，连接延迟到 ainit_mcp）"""
         mcp_cfg = self.config.raw.get("mcp", {})
         if not mcp_cfg.get("enabled", False):
             return
@@ -137,21 +137,27 @@ class EvolvingAgent:
             return
 
         self.mcp_client = MCPClient(servers)
-        results = self.mcp_client.connect_all()
+        logger.info(f"[MCP] Client 已初始化，{len(servers)} 个 server 待连接")
+
+    async def ainit_mcp(self):
+        """异步连接 MCP Servers 并注册 Tools 为 Skills"""
+        if self.mcp_client is None:
+            return
+
+        results = await self.mcp_client.connect_all()
         for name, ok in results.items():
             status = "✅" if ok else "❌"
             logger.info(f"[MCP] {status} {name}")
 
         # 将 MCP tools 注册为 Skill
-        if self.mcp_client:
-            tools = self.mcp_client.list_tools()
-            for tool in tools:
-                self.skills.register(MCPToolSkill(
-                    self.mcp_client, tool.name, tool.description, tool.server
-                ))
-            # 注册 MCP 路由 Skill
-            self.skills.register(MCPRouterSkill(self.mcp_client, self.llm_client))
-            logger.info(f"[MCP] 已注册 {len(tools)} 个 MCP tools + 1 个路由 Skill")
+        tools = self.mcp_client.list_tools()
+        for tool in tools:
+            self.skills.register(MCPToolSkill(
+                self.mcp_client, tool.name, tool.description, tool.server
+            ))
+        # 注册 MCP 路由 Skill
+        self.skills.register(MCPRouterSkill(self.mcp_client, self.llm_client))
+        logger.info(f"[MCP] 已注册 {len(tools)} 个 MCP tools + 1 个路由 Skill")
 
     def _build_system_prompt(self, query_hint: str = "") -> str:
         parts = []
@@ -218,7 +224,7 @@ class EvolvingAgent:
 
         self.event_bus.publish("session.started", {"agent": self.name})
 
-    def chat(self, user_input: str):
+    async def chat(self, user_input: str):
         if not self.session_active:
             self.start_session()
 
@@ -266,11 +272,11 @@ class EvolvingAgent:
         if is_explicit_plan or should_auto_plan:
             task = user_input.replace("/plan", "").strip() if is_explicit_plan else user_input
             logger.info(f"  [PlanningFlow] 任务规划: {task[:60]}...")
-            plan = self.planner.decompose(task)
+            plan = await self.planner.adecompose(task)
 
             if plan and plan.steps:
                 logger.info(f"  [PlanningFlow] 生成 {len(plan.steps)} 步计划")
-                plan = self.executor.run(plan)
+                plan = await self.executor.arun(plan)
                 response = plan.summary or "计划执行完成。"
 
                 # 记录执行结果
@@ -333,7 +339,7 @@ class EvolvingAgent:
         temperature = max(0.0, min(1.0, temperature))
         max_tokens = self.personality.get_max_tokens()
 
-        return self.llm_client.chat(
+        return await self.llm_client.achat(
             messages,
             temperature=temperature,
             max_tokens=max_tokens,
