@@ -14,6 +14,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setLevel(logging.DEBUG)
+    logger.addHandler(handler)
 
 # 将项目根目录加入路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -137,7 +142,9 @@ async def websocket_chat(websocket: WebSocket, client_id: str):
 
             try:
                 # 获取 Agent 回复
+                logger.info(f"[WebSocket] Calling agent.chat for client={client_id}")
                 response = await agent.chat(user_input, image=image)
+                logger.info(f"[WebSocket] agent.chat returned, type={type(response).__name__}")
 
                 # 处理 Skill 直接返回（字符串）
                 if isinstance(response, str):
@@ -157,17 +164,20 @@ async def websocket_chat(websocket: WebSocket, client_id: str):
                 # 流式输出（生成器）
                 full_text = ""
                 await manager.send_json(client_id, {"type": "thinking", "content": False})
+                logger.info(f"[WebSocket] Starting stream iteration for client={client_id}")
 
+                chunk_count = 0
                 async for chunk in response:
                     full_text += chunk
+                    chunk_count += 1
                     await manager.send_json(client_id, {
                         "type": "stream",
                         "chunk": chunk
                     })
-                    # 小延迟让前端有打字机效果
-                    await asyncio.sleep(0.02)
 
-                # 流式结束
+                logger.info(f"[WebSocket] Stream done, {chunk_count} chunks for client={client_id}")
+
+                # 流式结束 - 立即发送 done 消息
                 await manager.send_json(client_id, {
                     "type": "message",
                     "role": "assistant",
@@ -177,12 +187,19 @@ async def websocket_chat(websocket: WebSocket, client_id: str):
                 span.set_attribute("response_length", len(full_text))
                 span.set_attribute("response_type", "stream")
 
-                # 收尾：记录记忆 + 实时学习
-                agent.finalize_response(user_input, full_text)
+                # 收尾：记录记忆 + 实时学习（后台执行，不阻塞响应）
+                try:
+                    agent.finalize_response(user_input, full_text)
+                except Exception as finalize_err:
+                    logger.warning(f"[WebSocket] finalize_response error: {finalize_err}")
 
                 # 发送状态更新
-                await _send_status(client_id, agent)
+                try:
+                    await _send_status(client_id, agent)
+                except Exception as status_err:
+                    logger.warning(f"[WebSocket] _send_status error: {status_err}")
             except Exception as e:
+                logger.exception(f"[WebSocket] Error processing message for client={client_id}: {e}")
                 span.record_exception(e)
                 await manager.send_json(client_id, {
                     "type": "error",

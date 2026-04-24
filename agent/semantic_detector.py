@@ -77,7 +77,7 @@ class SemanticSignalDetector:
     def _load_or_build_anchors(self):
         """加载或构建意图锚点向量"""
         cache_path = os.path.join(self.cache_dir, "intent_anchors.json")
-        vec_cache_path = os.path.join(self.cache_dir, "intent_anchors.npy")
+        vec_cache_path = os.path.join(self.cache_dir, "intent_anchors.npz")
 
         if os.path.exists(cache_path) and os.path.exists(vec_cache_path):
             try:

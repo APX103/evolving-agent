@@ -75,26 +75,12 @@ class EmotionSensor:
         分析用户输入的情绪状态
         返回: {"label": str, "intensity": float, "needs": [str], "subtle_signals": str}
         """
-        prompt = f"""分析以下用户消息的情绪状态。
+        prompt = f"""分析用户消息情绪，返回JSON：
+{{"label": "标签(疲惫/焦虑/兴奋/沮丧/愤怒/敷衍/好奇/平静/困惑)", "intensity": 0.0-1.0, "needs": ["需求"], "subtle_signals": "信号"}}
 
-要求：
-- 识别表面情绪和潜在情绪（比如"还行"可能是疲惫或敷衍）
-- 注意语气词、标点、用词选择中的微妙信号
-- 考虑上下文中的情绪变化
+消息："{text}"
 
-{context}
-
-用户消息："{text}"
-
-输出 JSON：
-{{
-  "label": "情绪标签（疲惫/焦虑/兴奋/沮丧/愤怒/敷衍/好奇/平静/困惑）",
-  "intensity": 0.0-1.0,
-  "needs": ["用户此刻需要什么（如：被倾听、解决方案、独处空间、鼓励）"],
-  "subtle_signals": "观察到的微妙语气信号"
-}}
-
-只返回 JSON，不要其他文字。"""
+只返回JSON。"""
 
         try:
             result = self.llm_client.chat_structured(

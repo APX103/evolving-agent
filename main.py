@@ -9,6 +9,7 @@ import sys
 import os
 import logging
 import argparse
+import asyncio
 
 # 将项目根目录加入路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -46,6 +47,10 @@ def setup_logging():
     root.setLevel(level)
     root.addHandler(file_handler)
     root.addHandler(console_handler)
+
+    # 降低第三方库的日志级别，避免污染控制台
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def print_banner(version="3.2"):

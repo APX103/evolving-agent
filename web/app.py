@@ -13,6 +13,10 @@ from web.api import app
 
 if __name__ == "__main__":
     import uvicorn
+    import logging
+    # 降低第三方库的日志级别，避免污染控制台
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     uvicorn.run(
         "web.app:app",
         host="0.0.0.0",

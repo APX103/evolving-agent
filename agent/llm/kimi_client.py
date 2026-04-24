@@ -31,6 +31,10 @@ class KimiLLMClient(LLMClient):
             if user_agent:
                 request.headers["User-Agent"] = user_agent
 
+        async def _async_force_ua(request):
+            if user_agent:
+                request.headers["User-Agent"] = user_agent
+
         # 同步 HTTP 客户端
         self._sync_http_client = httpx.Client(
             headers={"User-Agent": user_agent} if user_agent else {},
@@ -40,7 +44,7 @@ class KimiLLMClient(LLMClient):
         # 异步 HTTP 客户端
         self._async_http_client = httpx.AsyncClient(
             headers={"User-Agent": user_agent} if user_agent else {},
-            event_hooks={"request": [_force_ua]},
+            event_hooks={"request": [_async_force_ua]},
             timeout=httpx.Timeout(30.0, connect=10.0),
         )
 
@@ -103,7 +107,8 @@ class KimiLLMClient(LLMClient):
                 )
                 latency_ms = (time.time() - start) * 1000
                 msg = response.choices[0].message
-                content = msg.content or getattr(msg, "reasoning_content", None) or ""
+                # 优先使用 content，过滤 reasoning_content
+                content = msg.content or ""
                 prompt_text = messages[-1].get("content", "") if messages else ""
                 self._finish_llm_span(span, llm_logger, response, latency_ms, prompt_text, content)
                 return content
@@ -121,7 +126,8 @@ class KimiLLMClient(LLMClient):
         for chunk in response:
             if chunk.choices and chunk.choices[0].delta:
                 delta = chunk.choices[0].delta
-                text = delta.content or getattr(delta, "reasoning_content", None) or ""
+                # 只返回 content，过滤掉 reasoning_content
+                text = delta.content or ""
                 if text:
                     yield text
 
@@ -132,7 +138,8 @@ class KimiLLMClient(LLMClient):
             for chunk in response:
                 if chunk.choices and chunk.choices[0].delta:
                     delta = chunk.choices[0].delta
-                    text = delta.content or getattr(delta, "reasoning_content", None) or ""
+                    # 只返回 content，过滤掉 reasoning_content
+                    text = delta.content or ""
                     if text:
                         full_text += text
                         yield text
@@ -278,7 +285,8 @@ class KimiLLMClient(LLMClient):
                 )
                 latency_ms = (time.time() - start) * 1000
                 msg = response.choices[0].message
-                content = msg.content or getattr(msg, "reasoning_content", None) or ""
+                # 优先使用 content，过滤 reasoning_content
+                content = msg.content or ""
                 prompt_text = messages[-1].get("content", "") if messages else ""
                 self._finish_llm_span(span, llm_logger, response, latency_ms, prompt_text, content)
                 return content
@@ -298,7 +306,8 @@ class KimiLLMClient(LLMClient):
         async for chunk in response:
             if chunk.choices and chunk.choices[0].delta:
                 delta = chunk.choices[0].delta
-                text = delta.content or getattr(delta, "reasoning_content", None) or ""
+                # 只返回 content，过滤掉 reasoning_content
+                text = delta.content or ""
                 if text:
                     yield text
 
@@ -309,7 +318,8 @@ class KimiLLMClient(LLMClient):
             async for chunk in response:
                 if chunk.choices and chunk.choices[0].delta:
                     delta = chunk.choices[0].delta
-                    text = delta.content or getattr(delta, "reasoning_content", None) or ""
+                    # 只返回 content，过滤掉 reasoning_content
+                    text = delta.content or ""
                     if text:
                         full_text += text
                         yield text
@@ -367,10 +377,10 @@ class KimiLLMClient(LLMClient):
     def chat_structured(
         self,
         prompt: str,
-        response_model: Type[T],
+        response_model: Union[Type[T], Dict[str, Any]],
         system: str = "",
         **kwargs,
-    ) -> T:
+    ) -> Union[T, Dict[str, Any]]:
         from pydantic import ValidationError
 
         t = kwargs.get("temperature", self.temperature)
@@ -395,6 +405,13 @@ class KimiLLMClient(LLMClient):
             raw = self.quick_chat(prompt, system=system)
 
         cleaned = self._clean_json(raw)
+        
+        # Handle dict schema (JSON Schema object)
+        if isinstance(response_model, dict):
+            import json as _json
+            return _json.loads(cleaned)
+        
+        # Handle Pydantic model
         try:
             return response_model.model_validate_json(cleaned)
         except ValidationError as e:
@@ -416,7 +433,7 @@ class KimiLLMClient(LLMClient):
     async def aclose(self) -> None:
         """关闭异步 HTTP 客户端和 OpenAI 客户端"""
         await self._async_client.close()
-        await self._async_http_client.close()
+        await self._async_http_client.aclose()
 
     async def achat_structured(
         self,
