@@ -8,6 +8,8 @@ import logging
 
 from pydantic import BaseModel, Field
 
+from agent.observability import get_performance_monitor
+
 logger = logging.getLogger(__name__)
 
 

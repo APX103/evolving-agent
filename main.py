@@ -105,7 +105,7 @@ async def run_classic_mode(args):
         if user_input == "/bye":
             agent.end_session()
             print("再见！下次我会更聪明 👋\n")
-            continue
+            break
 
         if user_input in ("/stats", "/mem", "/clean", "/skills", "/personality", "/help"):
             _handle_classic_command(agent, user_input)
@@ -199,7 +199,7 @@ async def run_multi_agent_mode(args):
         if user_input == "/bye":
             classic_agent.end_session()
             print("再见！下次我会更聪明 👋\n")
-            continue
+            break
 
         if user_input == "/agents":
             print(f"\n🤖 可用 Agent 列表:")

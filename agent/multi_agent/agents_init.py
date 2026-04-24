@@ -83,7 +83,8 @@ def create_registry(memory, llm_client, config: Optional[Dict] = None) -> AgentR
     registry.set_context_manager(cm)
 
     logger.info("[AgentFactory] AgentRegistry 初始化完成")
-    logger.info(f"[AgentFactory] 可用 Agent: {', '.join(registry.list_agents())}")
+    agent_names = [a.get('name', str(a)) for a in registry.list_agents()]
+    logger.info(f"[AgentFactory] 可用 Agent: {', '.join(agent_names)}")
     return registry
 
 
