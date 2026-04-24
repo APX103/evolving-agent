@@ -3,7 +3,7 @@
 将 MemoryManager 拆分为独立的存储层
 """
 # 从 memory.py 重新导出 MemoryManager（避免 import 冲突）
-from agent.memory_module import MemoryManager  # noqa: F401
+from agent.memory.memory_module import MemoryManager  # noqa: F401
 
 from agent.memory.base import MemoryStore
 from agent.memory.short_term import ShortTermStore

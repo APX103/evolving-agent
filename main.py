@@ -14,7 +14,7 @@ import asyncio
 # 将项目根目录加入路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from agent.config import Config
+from agent.core.config import Config
 
 
 def setup_logging():
@@ -74,7 +74,7 @@ def print_banner(version="3.2"):
 
 async def run_classic_mode(args):
     """经典模式（v3.2 兼容，已 async 化）"""
-    from agent.core import EvolvingAgent
+    from agent.core.agent import EvolvingAgent
 
     print_banner("3.2")
 
@@ -158,7 +158,7 @@ def _handle_classic_command(agent, cmd):
 
 async def run_multi_agent_mode(args):
     """多 Agent 协作模式 (v4.0)"""
-    from agent.core import EvolvingAgent
+    from agent.core.agent import EvolvingAgent
     from agent.multi_agent.agents_init import create_registry
 
     print_banner("4.0")

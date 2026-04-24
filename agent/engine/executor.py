@@ -15,11 +15,11 @@ from typing import Any, Dict, Optional
 from simpleeval import SimpleEval
 
 from agent.llm.base import LLMClient
-from agent.plan import Plan, Step, StepStatus
-from agent.mcp_client import MCPClient
-from agent.sandbox import PythonSandbox
+from agent.planning.plan import Plan, Step, StepStatus
+from agent.mcp.client import MCPClient
+from agent.mcp.sandbox import PythonSandbox
 from agent.workflow.graph import Graph, Node, Edge
-from agent.checkpoint import CheckpointManager
+from agent.core.checkpoint import CheckpointManager
 
 logger = logging.getLogger(__name__)
 

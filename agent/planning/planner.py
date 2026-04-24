@@ -9,8 +9,8 @@ from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field
 
 from agent.llm.base import LLMClient
-from agent.structured_output import StructuredOutputExtractor
-from agent.plan import Plan, Step, StepStatus
+from agent.llm.structured_output import StructuredOutputExtractor
+from agent.planning.plan import Plan, Step, StepStatus
 
 logger = logging.getLogger(__name__)
 

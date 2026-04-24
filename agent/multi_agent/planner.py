@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field
 
 from agent.multi_agent.base import BaseAgent, AgentContext, AgentResponse, IntentClassification
-from agent.plan import Plan, Step, StepStatus
+from agent.planning.plan import Plan, Step, StepStatus
 
 logger = logging.getLogger(__name__)
 

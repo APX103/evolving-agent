@@ -14,8 +14,8 @@ from mcp.client.stdio import stdio_client
 from mcp.types import TextContent
 
 from agent.observability import get_tracer
-from agent.mcp_security import ToolAuditor, PolicyEnforcer, Decision
-from agent.approval import ApprovalManager
+from agent.mcp.security import ToolAuditor, PolicyEnforcer, Decision
+from agent.mcp.approval import ApprovalManager
 
 logger = logging.getLogger(__name__)
 

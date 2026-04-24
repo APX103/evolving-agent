@@ -10,8 +10,8 @@ import re
 import shutil
 from typing import Dict, List, Tuple
 
-from agent.skill import Skill, SkillResult
-from agent.skills_dev.git_ops import GitSkill
+from agent.skills.base import Skill, SkillResult
+from agent.skills.dev.git_ops import GitSkill
 
 
 class EditSkill(Skill):

@@ -10,9 +10,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agent.user_context import UserContext
-from agent.procedural_memory import ProceduralMemory, ProceduralRule
-from agent.context_compressor import ContextCompressor
+from agent.context.user_context import UserContext
+from agent.memory.procedural_memory import ProceduralMemory, ProceduralRule
+from agent.memory.context_compressor import ContextCompressor
 
 
 def test_user_context():

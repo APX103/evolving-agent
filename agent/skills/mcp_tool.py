@@ -7,8 +7,8 @@ from typing import Dict, List, Optional, Any
 
 from pydantic import BaseModel, Field
 
-from agent.skill import Skill, SkillResult
-from agent.mcp_client import MCPClient, MCPCallResult
+from agent.skills.base import Skill, SkillResult
+from agent.mcp.client import MCPClient, MCPCallResult
 
 logger = logging.getLogger(__name__)
 

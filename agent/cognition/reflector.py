@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from agent.llm.base import LLMClient
-from agent.memory_module import MemoryManager
+from agent.memory.memory_module import MemoryManager
 
 logger = logging.getLogger(__name__)
 

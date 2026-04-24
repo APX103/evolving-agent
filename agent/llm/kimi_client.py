@@ -10,7 +10,7 @@ from typing import Any, AsyncGenerator, Dict, Generator, List, Optional, Type, T
 import numpy as np
 from openai import AsyncOpenAI, OpenAI
 
-from agent.config import Config
+from agent.core.config import Config
 from agent.llm.base import LLMClient, StructuredOutputError
 from agent.observability import get_tracer, get_llm_logger
 

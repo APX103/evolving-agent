@@ -23,12 +23,12 @@ if not logger.handlers:
 # 将项目根目录加入路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agent.config import Config
-from agent.core import EvolvingAgent
+from agent.core.config import Config
+from agent.core.agent import EvolvingAgent
 from agent.observability import get_tracer
 from agent.observability.jsonl_backend import JsonlBackend
 from agent.observability.llm_logger import get_llm_logger
-from agent.performance_monitor import get_performance_monitor
+from agent.observability.performance_monitor import get_performance_monitor
 
 app = FastAPI(title="Evolving Agent Web")
 

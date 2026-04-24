@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from typing import Dict, List
 
-from agent.skill import Skill, SkillResult
+from agent.skills.base import Skill, SkillResult
 
 
 class GrepSkill(Skill):

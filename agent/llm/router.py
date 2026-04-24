@@ -9,7 +9,7 @@ import numpy as np
 
 from agent.llm.base import LLMClient, StructuredOutputError
 from agent.llm.kimi_client import KimiLLMClient
-from agent.config import Config
+from agent.core.config import Config
 
 logger = logging.getLogger(__name__)
 

@@ -15,8 +15,8 @@ from agent.multi_agent.reviewer import ReviewerAgent
 from agent.multi_agent.registry import AgentRegistry
 from agent.multi_agent.context_manager import ContextManager
 from agent.multi_agent.handoff import HandoffProtocol
-from agent.performance_monitor import PerformanceMonitor
-from agent.agent_reflector import AgentReflector
+from agent.observability.performance_monitor import PerformanceMonitor
+from agent.cognition.agent_reflector import AgentReflector
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +109,7 @@ def create_full_system(memory, llm_client, config: Optional[Dict] = None) -> Dic
     monitor = PerformanceMonitor(storage_path=storage_path)
 
     # 3. 创建 Agent Reflector
-    from agent.memory_namespace import MemoryNamespace
+    from agent.memory.memory_namespace import MemoryNamespace
     # 尝试获取 user_id
     user_id = getattr(memory, 'user_id', 'default')
     try:

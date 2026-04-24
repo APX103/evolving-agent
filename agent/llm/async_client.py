@@ -26,7 +26,7 @@ class AsyncKimiClient(AsyncLLMClient):
     """基于 aiohttp 的异步 Kimi 客户端"""
 
     def __init__(self, config):
-        from agent.config import Config
+        from agent.core.config import Config
         cfg = config if isinstance(config, Config) else Config(config)
         kimi_cfg = cfg.kimi if hasattr(cfg, 'kimi') else cfg.raw.get("kimi", {})
 

@@ -10,14 +10,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 
-from agent.mcp_security import (
+from agent.mcp.security import (
     ToolAuditor,
     PolicyEnforcer,
     RiskLevel,
     Decision,
     AuditReport,
 )
-from agent.approval import ApprovalManager
+from agent.mcp.approval import ApprovalManager
 
 
 class TestToolAuditor:

@@ -8,7 +8,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agent.skills_dev import EditSkill, MapSkill, GrepSkill, TestSkill, GitSkill
+from agent.skills.dev import EditSkill, MapSkill, GrepSkill, TestSkill, GitSkill
 
 
 def test_edit_skill_basic(tmp_path, monkeypatch):

@@ -9,29 +9,29 @@ import threading
 from typing import Dict, List, Optional
 from datetime import datetime
 
-from agent.config import Config
-from agent.events import EventBus, default_bus
+from agent.core.config import Config
+from agent.core.events import EventBus, default_bus
 from agent.llm.kimi_client import KimiLLMClient
 from agent.memory import MemoryManager
-from agent.learner import Learner
-from agent.reflector import Reflector
-from agent.personality import PersonalityEngine
-from agent.signal_learner import SignalLearner
-from agent.skill import SkillRegistry
-from agent.skills_builtin import build_default_skills
-from agent.emotion import EmotionSensor
-from agent.relationship import RelationshipLog
-from agent.mood import AgentMood
+from agent.cognition.learner import Learner
+from agent.cognition.reflector import Reflector
+from agent.context.personality import PersonalityEngine
+from agent.cognition.signal_learner import SignalLearner
+from agent.skills.base import SkillRegistry
+from agent.skills.builtin import build_default_skills
+from agent.context.emotion import EmotionSensor
+from agent.context.relationship import RelationshipLog
+from agent.context.mood import AgentMood
 from agent.storage.local_json import LocalJsonStorage
-from agent.mcp_client import MCPClient, MCPServerConfig
-from agent.mcp_tool_skill import MCPRouterSkill, MCPToolSkill
-from agent.planner import Planner
-from agent.executor import Executor
-from agent.plan import Plan, StepStatus
-from agent.checkpoint import CheckpointManager
-from agent.procedural_memory import ProceduralMemory
-from agent.world_state import WorldState
-from agent.approval import ApprovalManager
+from agent.mcp.client import MCPClient, MCPServerConfig
+from agent.skills.mcp_tool import MCPRouterSkill, MCPToolSkill
+from agent.planning.planner import Planner
+from agent.engine.executor import Executor
+from agent.planning.plan import Plan, StepStatus
+from agent.core.checkpoint import CheckpointManager
+from agent.memory.procedural_memory import ProceduralMemory
+from agent.context.world_state import WorldState
+from agent.mcp.approval import ApprovalManager
 
 logger = logging.getLogger("agent.core")
 

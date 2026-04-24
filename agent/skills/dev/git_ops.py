@@ -8,7 +8,7 @@ import re
 import subprocess
 from typing import Dict
 
-from agent.skill import Skill, SkillResult
+from agent.skills.base import Skill, SkillResult
 
 
 class GitSkill(Skill):

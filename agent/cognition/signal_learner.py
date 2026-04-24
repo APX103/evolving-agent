@@ -9,13 +9,13 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from agent.events import EventBus, default_bus
+from agent.core.events import EventBus, default_bus
 from agent.llm.base import LLMClient
 from agent.memory import MemoryManager
-from agent.quality_judge import QualityJudge
-from agent.semantic_detector import SemanticSignalDetector
-from agent.knowledge_graph import Triple
-from agent.structured_output import ExtractedKnowledgeItem, StructuredOutputExtractor
+from agent.cognition.quality_judge import QualityJudge
+from agent.cognition.semantic_detector import SemanticSignalDetector
+from agent.memory.knowledge_graph import Triple
+from agent.llm.structured_output import ExtractedKnowledgeItem, StructuredOutputExtractor
 
 
 class SignalParseResult(BaseModel):

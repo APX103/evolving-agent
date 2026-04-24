@@ -7,7 +7,7 @@ import logging
 from typing import Dict, List, Optional
 
 from agent.llm.base import LLMClient
-from agent.structured_output import JudgmentResultItem, StructuredOutputExtractor
+from agent.llm.structured_output import JudgmentResultItem, StructuredOutputExtractor
 
 logger = logging.getLogger(__name__)
 

@@ -12,6 +12,11 @@ from agent.observability.tracer import (
 )
 from agent.observability.llm_logger import LLMLogger, get_llm_logger, set_llm_logger
 from agent.observability.jsonl_backend import JsonlBackend
+from agent.observability.performance_monitor import (
+    PerformanceMonitor,
+    AgentMetrics,
+    get_performance_monitor,
+)
 
 __all__ = [
     "Tracer",
@@ -25,4 +30,7 @@ __all__ = [
     "get_llm_logger",
     "set_llm_logger",
     "JsonlBackend",
+    "PerformanceMonitor",
+    "AgentMetrics",
+    "get_performance_monitor",
 ]

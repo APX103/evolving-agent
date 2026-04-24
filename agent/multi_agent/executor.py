@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from agent.multi_agent.base import BaseAgent, AgentContext, AgentResponse, IntentClassification
 from agent.multi_agent.handoff import HandoffRequest, HandoffProtocol
-from agent.plan import Plan, Step, StepStatus
+from agent.planning.plan import Plan, Step, StepStatus
 from agent.observability import get_tracer
 
 logger = logging.getLogger(__name__)

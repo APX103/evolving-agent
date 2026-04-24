@@ -13,9 +13,9 @@ from pydantic import TypeAdapter
 
 from agent.llm.base import LLMClient
 from agent.memory import MemoryManager
-from agent.quality_judge import QualityJudge
-from agent.knowledge_graph import Triple
-from agent.structured_output import ExtractedKnowledgeItem, StructuredOutputExtractor
+from agent.cognition.quality_judge import QualityJudge
+from agent.memory.knowledge_graph import Triple
+from agent.llm.structured_output import ExtractedKnowledgeItem, StructuredOutputExtractor
 
 
 # ── Few-shot 示例（结构化版本） ──

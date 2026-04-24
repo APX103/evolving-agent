@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 def test_scheduler_basic(tmp_path):
     """测试调度器基础功能"""
     print("[E2E] 测试 Scheduler...")
-    from agent.scheduler import AgentScheduler, ScheduledTask
+    from agent.engine.scheduler import AgentScheduler, ScheduledTask
 
     scheduler = AgentScheduler(storage_path=str(tmp_path))
 
@@ -78,7 +78,7 @@ def test_scheduler_basic(tmp_path):
 async def test_scheduler_async_trigger(tmp_path):
     """测试调度器异步触发"""
     print("[E2E] 测试 Scheduler 异步触发...")
-    from agent.scheduler import AgentScheduler, ScheduledTask
+    from agent.engine.scheduler import AgentScheduler, ScheduledTask
 
     triggered = []
 
@@ -111,7 +111,7 @@ async def test_scheduler_async_trigger(tmp_path):
 def test_auto_skill_generator(tmp_path):
     """测试 Skill 自动生成"""
     print("[E2E] 测试 AutoSkillGenerator...")
-    from agent.skill_auto import AutoSkillGenerator
+    from agent.skills.auto import AutoSkillGenerator
 
     gen = AutoSkillGenerator(storage_path=str(tmp_path))
 
@@ -154,7 +154,7 @@ def test_auto_skill_generator(tmp_path):
 def test_session_search_engine(tmp_path):
     """测试 FTS5 会话搜索"""
     print("[E2E] 测试 SessionSearchEngine...")
-    from agent.session_search import SessionSearchEngine
+    from agent.planning.session_search import SessionSearchEngine
 
     db_path = tmp_path / "test.db"
     engine = SessionSearchEngine(db_path=str(db_path))
@@ -211,7 +211,7 @@ def test_session_search_engine(tmp_path):
 def test_session_search_time_filter(tmp_path):
     """测试时间过滤"""
     print("[E2E] 测试 SessionSearch 时间过滤...")
-    from agent.session_search import SessionSearchEngine
+    from agent.planning.session_search import SessionSearchEngine
 
     db_path = tmp_path / "time_test.db"
     engine = SessionSearchEngine(db_path=str(db_path))

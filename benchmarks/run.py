@@ -32,7 +32,7 @@ async def main():
     tasks = load_suite(args.suite)
 
     # Lazy-import agent to avoid heavy import unless needed
-    from agent.core import EvolvingAgent
+    from agent.core.agent import EvolvingAgent
 
     agent = EvolvingAgent("config.yaml")
     runner = BenchmarkRunner(agent)

@@ -8,7 +8,7 @@ import os
 import re
 from typing import Dict, List
 
-from agent.skill import Skill, SkillResult
+from agent.skills.base import Skill, SkillResult
 
 
 class MapSkill(Skill):

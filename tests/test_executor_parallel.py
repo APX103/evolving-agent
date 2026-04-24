@@ -11,8 +11,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agent.executor import Executor
-from agent.plan import Plan, Step, StepStatus
+from agent.engine.executor import Executor
+from agent.planning.plan import Plan, Step, StepStatus
 from tests.conftest import MockLLM
 
 

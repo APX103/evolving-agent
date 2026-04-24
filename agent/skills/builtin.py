@@ -8,9 +8,9 @@ from typing import Dict, Optional
 import logging
 
 from simpleeval import simple_eval
-from agent.skill import Skill, SkillResult
-from agent.sandbox import PythonSandbox
-from agent.approval import ApprovalManager
+from agent.skills.base import Skill, SkillResult
+from agent.mcp.sandbox import PythonSandbox
+from agent.mcp.approval import ApprovalManager
 
 logger = logging.getLogger(__name__)
 
@@ -314,8 +314,8 @@ class PythonSkill(Skill):
 
 def build_default_skills(approval: Optional[ApprovalManager] = None):
     """构建默认 Skill 集合"""
-    from agent.skill import SkillRegistry
-    from agent.skills_dev import EditSkill, MapSkill, GrepSkill, TestSkill, GitSkill
+    from agent.skills.base import SkillRegistry
+    from agent.skills.dev import EditSkill, MapSkill, GrepSkill, TestSkill, GitSkill
 
     registry = SkillRegistry()
     registry.register(EchoSkill())

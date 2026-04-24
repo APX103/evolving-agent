@@ -7,7 +7,7 @@ from typing import Any, Dict
 
 import yaml
 
-from agent.config_models import AppConfig
+from agent.core.config_models import AppConfig
 
 
 class Config:

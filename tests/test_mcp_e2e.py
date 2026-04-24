@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agent.mcp_client import MCPClient, MCPServerConfig
+from agent.mcp.client import MCPClient, MCPServerConfig
 
 
 def log(msg):

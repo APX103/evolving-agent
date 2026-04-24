@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import asyncio
 import logging
 from bot.feishu_adapter import FeishuBotAdapter, FeishuConfig
-from agent.config import Config
+from agent.core.config import Config
 
 logger = logging.getLogger("bot.feishu")
 

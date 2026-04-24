@@ -20,7 +20,7 @@ def log(msg):
 
 
 def _test_initialization():
-    from agent.core import EvolvingAgent
+    from agent.core.agent import EvolvingAgent
     log("=" * 50)
     log("测试 1: Agent 初始化")
     agent = EvolvingAgent("config.yaml")
@@ -150,7 +150,7 @@ def _test_storage_files():
 
 
 def _test_concurrent_writes():
-    from agent.core import EvolvingAgent
+    from agent.core.agent import EvolvingAgent
     log("=" * 50)
     log("测试 9: 并发写入安全（模拟快速多轮对话）")
     agent = EvolvingAgent("config.yaml")
@@ -186,7 +186,7 @@ def _test_concurrent_writes():
 
 
 def _test_config_singleton():
-    from agent.config import Config
+    from agent.core.config import Config
     log("=" * 50)
     log("测试 10: 配置单例")
     cfg1 = Config("config.yaml")
@@ -225,7 +225,7 @@ def main():
 def test_integration_full_stack():
     """Run the full integration stack against real APIs."""
     # Lazy import to avoid collection errors when agent.core has import issues
-    from agent.core import EvolvingAgent
+    from agent.core.agent import EvolvingAgent
     _ = EvolvingAgent  # silence unused import warning for the closure
     main()
 

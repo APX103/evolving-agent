@@ -11,12 +11,12 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-from agent.config import Config
+from agent.core.config import Config
 from agent.llm.base import LLMClient
 from agent.storage.base import StorageBackend
 from agent.storage.local_json import LocalJsonStorage
-from agent.knowledge_graph import KnowledgeGraph
-from agent.context_compressor import ContextCompressor
+from agent.memory.knowledge_graph import KnowledgeGraph
+from agent.memory.context_compressor import ContextCompressor
 
 from agent.memory.short_term import ShortTermStore
 from agent.memory.working import WorkingMemoryStore

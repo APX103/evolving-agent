@@ -9,7 +9,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agent.approval import ApprovalManager, ApprovalState
+from agent.mcp.approval import ApprovalManager, ApprovalState
 
 
 def test_requires_approval():
